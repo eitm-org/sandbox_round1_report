@@ -1,0 +1,15 @@
+TODO:
+
+* QC-- interpretations and overall summary
+* QC-- process control chart
+* QC nice to have-- process control chart + white noise modelling
+* initial screen-- hit designation
+* initial screen-- hit plots
+* initial screen-- interpretations and overall summary
+* dose response-- raw plots by compound
+* dose response-- normalized plots by compound
+* dose resposne-- interpretations and overall summary
+* overall summary
+* code-- put data cleaning in a separate script in the munge directory
+* code-- functionalize
+* code-- add tests

@@ -1,0 +1,547 @@
+---
+title: "Sandbox Round 1"
+author: "Abby Coleman"
+date: "`r Sys.Date()`"
+geometry: margin = 2cm
+output: 
+  pdf_document:
+    toc: TRUE
+    
+header-includes:
+  - \usepackage{titling}
+  - \pretitle{\begin{center}
+  - \includegraphics[width=1in,height=1in]{Ellison Medical Institute Logo_Bronze.png}\LARGE\\}
+  - \posttitle{\end{center}}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[C]{Sandbox Round 1}
+  - \fancyhead[L]{\includegraphics[width=0.5in]{Ellison Medical Institute Logo_Bronze.png}}
+  - \fancyfoot[L]{Ellison Medical Institute}
+  - \setlength{\headheight}{30.10677pt}
+---
+
+```{r setup, include=FALSE}
+library(here)
+library(pander)
+library(ggplot2)
+library(ggbeeswarm)
+library(tidyverse)
+library(kableExtra)
+library(viridis)
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+  
+# Overall Summary
+
+```{r data_load}
+#TODO: throw this into a script in the munge directory, functionalize, add tests
+
+ctrl0 <- "DMSO"
+ctrl100 <- "R1881"
+
+screen <- readRDS(here("data", "screen_data.rds")) %>%
+  unnest(cols = data, names_sep = ".") %>%
+  select(
+    study_name,
+    study_rid,
+    experiment_name,
+    experiment_rid,
+    experiment_id,
+    experiment_type,
+    assay_type,
+    container,
+    start_date,
+    instrument,
+    sop,
+    data.plate_id,
+    data.replicate_group,
+    data.drug_name,
+    data.drug_id,
+    data.concentration,
+    data.units,
+    sample_id,
+    data.well_id,
+    data.result,
+    data.plate_cv,
+    data.plate_z_prime,
+    data.norm_result
+  ) %>%
+  distinct()
+
+drc <- readRDS(here("data", "drc_data.rds")) %>%
+  unnest(cols = data, names_sep = ".") %>%
+  select(
+    study_name,
+    study_rid,
+    experiment_name,
+    experiment_rid,
+    experiment_id,
+    experiment_type,
+    assay_type,
+    container,
+    start_date,
+    instrument,
+    sop,
+    data.plate_id,
+    data.replicate_group,
+    data.drug_name,
+    data.drug_id,
+    data.concentration,
+    data.units,
+    sample_id,
+    data.well_id,
+    data.result,
+    data.plate_cv,
+    data.plate_z_prime,
+    data.norm_result
+  ) %>%
+  distinct()
+
+ctrl_list <- c(ctrl0, ctrl100)
+get_coi <- function(data, ctrl_list) {
+  drug_list <- unique(data$data.drug_name)
+  ndrug <- length(drug_list)
+  noctrls_list <- drug_list[!(drug_list %in% ctrl_list)]
+  if (length(noctrls_list) > 1) {
+    return("what the ")
+  } else if (length(noctrls_list) == 1) {
+    return(unlist(noctrls_list))
+  } else if (length(noctrls_list) == 0) {
+    if (ctrl100 %in% drug_list) {
+      return(ctrl100)
+    } else if (ctrl0 %in% drug_list) {
+      return(ctrl0)
+    } else {
+      return("blank well")
+    }
+  }
+}
+
+get_coi_concentration <- function(data, coi) {
+  coi_conc <- data[data$data.drug_name == coi, "data.concentration"][[1]]
+  return(coi_conc)
+}
+
+alldf <- bind_rows(screen, drc) %>%
+  #first, designate controls and designate "compound of interest"
+  #to do that, we have to nest by well (and keep all other columns outside of the nested part)
+  group_by(
+    data.well_id,
+    study_name,
+    study_rid,
+    experiment_name,
+    experiment_rid,
+    experiment_id,
+    experiment_type,
+    assay_type,
+    container,
+    start_date,
+    instrument,
+    sop,
+    data.plate_id,
+    data.replicate_group,
+    data.result,
+    data.plate_cv,
+    data.plate_z_prime,
+    data.norm_result
+  ) %>%
+  nest() %>%
+  mutate(
+    coi = map(data, get_coi, ctrl_list),
+    coi_dose = map2(data, coi, get_coi_concentration),
+    ctrl = case_when(
+      coi == ctrl0 ~ "0% control",
+      coi == ctrl100 ~ "100% control",
+      coi == "what the " ~ "what the ",
+      TRUE ~ "sample"
+    )
+  ) %>%
+  unnest(cols = c(ctrl, coi, coi_dose)) %>%
+  ungroup() %>%
+  #next, calculate mean and sd result for each replicate group
+  group_by(experiment_id, data.plate_id, coi, coi_dose, ctrl) %>%
+  mutate(
+    plate_mean_res = mean(data.result, na.rm = TRUE),
+    plate_sd_res = sd(data.result, na.rm = TRUE),
+    plate_cv_result = (plate_sd_res / plate_mean_res) * 100
+  ) %>%
+  ungroup() %>%
+  group_by(experiment_id, coi, coi_dose, ctrl) %>%
+  mutate(
+    exp_mean_res = mean(data.result, na.rm = TRUE),
+    exp_sd_res = sd(data.result, na.rm = TRUE),
+    exp_cv_result = (exp_sd_res / exp_mean_res) * 100
+  ) %>%
+  ungroup() %>%
+  #use those to calculate plate %CV and zfactor
+  group_by(data.plate_id) %>%
+  mutate(
+    plate_cv = mean(plate_cv_result, na.rm = TRUE),
+    plate_mean_ctrl100 = mean(data.result[ctrl == "100% control"], na.rm = TRUE),
+    plate_sd_ctrl100 = sd(data.result[ctrl == "100% control"], na.rm = TRUE),
+    plate_mean_ctrl0 = mean(data.result[ctrl == "0% control"], na.rm = TRUE),
+    plate_sd_ctrl0 = sd(data.result[ctrl == "0% control"], na.rm = TRUE),
+    normed_results = (data.result - plate_mean_ctrl0) / (plate_mean_ctrl100 - plate_mean_ctrl0) *
+      100
+  ) %>%
+  ungroup() %>%
+  group_by(experiment_id) %>%
+  mutate(
+    exp_cv = mean(exp_cv_result, na.rm = TRUE),
+    exp_mean_ctrl100 = mean(data.result[ctrl == "100% control"], na.rm = TRUE),
+    exp_sd_ctrl100 = sd(data.result[ctrl == "100% control"], na.rm = TRUE),
+    exp_mean_ctrl0 = mean(data.result[ctrl == "0% control"], na.rm = TRUE),
+    exp_sd_ctrl0 = sd(data.result[ctrl == "0% control"], na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    plate_zfactor = 1 - (
+      3 * (plate_sd_res + plate_sd_ctrl0) / (plate_mean_res - plate_mean_ctrl0)
+    ),
+    plate_zprime = 1 - (
+      3 * (plate_sd_ctrl100 + plate_sd_ctrl0) / (plate_mean_ctrl100 - plate_mean_ctrl0)
+    ),
+    exp_zfactor = 1 - (3 * (exp_sd_res + exp_sd_ctrl0) / (exp_mean_res - exp_mean_ctrl0)),
+    exp_zprime = 1 - (
+      3 * (exp_sd_ctrl100 + exp_sd_ctrl0) / (exp_mean_ctrl100 - exp_mean_ctrl0)
+    ),
+    summary_zfactor = case_when(
+      assay_type == "Screen" ~ exp_zfactor,
+      assay_type == "Dose Response Curve" ~ plate_zfactor
+    ),
+    summary_zprime = case_when(
+      assay_type == "Screen" ~ exp_zprime,
+      assay_type == "Dose Response Curve" ~ plate_zprime
+    ),
+    summary_cv = case_when(
+      assay_type == "Screen" ~ exp_cv,
+      assay_type == "Dose Response Curve" ~ plate_cv
+    ),
+    assay_type = factor(assay_type, levels = c("Screen", "Dose Response Curve"))
+  ) %>%
+  #calculate cv cutoffs
+  group_by(experiment_id, summary_cv, assay_type) %>%
+  nest() %>%
+  group_by(assay_type) %>%
+  mutate(cv_cutoff = quantile(summary_cv, prob = .75) + 1.5 * IQR(summary_cv)) %>%
+  unnest(cols = c(data)) %>%
+  ungroup()
+
+
+```
+
+
+\newpage
+
+# Quality Control
+
+## Overall Summary
+
+explain how zprimes, cvs are calculated for screens, drcs
+
+```{r qc_tab1}
+qctab <- alldf %>%
+  mutate(
+    plate_zprime = cell_spec(
+      round(plate_zprime, 3),
+      color = case_when(plate_zprime < 0 ~ "white", TRUE ~ "black"),
+      background = case_when(plate_zprime < 0 ~ "#A96D4B", TRUE ~ "white")
+    ),
+    summary_cv = cell_spec(
+      round(summary_cv, 3),
+      color = case_when(summary_cv > cv_cutoff ~ "white", TRUE ~ "black"),
+      background = case_when(summary_cv > cv_cutoff ~ "#A96D4B", TRUE ~ "white")
+    )
+  ) %>%
+  select(experiment_id,
+         experiment_type,
+         assay_type,
+         start_date,
+         plate_zprime,
+         summary_cv) %>%
+  distinct() %>%
+  arrange(assay_type, experiment_id)
+names(qctab) <- c(
+  "Experiment ID",
+  "Experiment Type",
+  "Assay Type",
+  "Start Date",
+  "Plate Z'Factor",
+  "Summary Percent CV"
+)
+kable(qctab, digits = 3)
+```
+
+check cv calculation
+
+\newpage
+
+## Z'Factor
+
+
+```{r qcbox, out.width = "60%"}
+qcplot <- alldf %>%
+  select(experiment_id,
+         experiment_type,
+         assay_type,
+         start_date,
+         plate_zprime) %>%
+  arrange(assay_type, experiment_id) %>%
+  distinct() %>%
+  mutate(
+    qc_flag = case_when(plate_zprime < 0 ~ "Z'Factor < 0", TRUE ~ "Passed QC"),
+    qc_flag = factor(qc_flag, levels = c("Passed QC", "Z'Factor < 0"))
+  ) %>%
+  ggplot(aes(x = assay_type, y = plate_zprime)) +
+  geom_boxplot(outliers = FALSE) +
+  geom_quasirandom(size = 3,
+                   alpha = .6,
+                   aes(color = experiment_id, shape = qc_flag)) +
+  scale_color_viridis_d(end = .9) +
+  theme_bw() +
+  labs(
+    x = "Assay Type",
+    y = "Plate Z'Factor",
+    color = "Experiment ID",
+    shape = "QC Flag",
+    title = "Z'Factors by Plate"
+  ) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    text = element_text(family = "serif")
+  )
+
+qcplot 
+```
+
+### Z'Factors < 0
+
+```{r zprime, fig.height = 6, fig.width = 8}
+zplot <- alldf %>%
+  filter(plate_zprime < 0) %>%
+  mutate(
+    nice_label = paste(assay_type, "Exp", experiment_id, "Plate", data.plate_id),
+    nice_ctrl = case_when(
+      ctrl == "100% control" ~ "100%\ncontrol",
+      ctrl == "0% control" ~ "0%\ncontrol",
+      TRUE ~ ctrl
+    )
+  ) %>%
+  ggplot(aes(x = nice_ctrl, y = data.result)) +
+  facet_wrap(~ nice_label, scales = "free") +
+  geom_boxplot(outliers = FALSE) +
+  geom_quasirandom(size = 3, alpha = .5, aes(color = coi)) +
+  scale_color_viridis_d(guide = "none", end = .8) +
+  # scale_color_gradient2(high = "#7E98AB", mid = "#841E5AFF", low = "#F06043FF",  midpoint = 0.5, na.value = "#000004FF") +
+  theme_bw() +
+  labs(
+    title = "Normalized Results for Z'Factor Outliers",
+    y = "Raw RLU",
+    x = "Control",
+    caption = "note differences in scale",
+    color = "Z Factor"
+  ) +
+  theme(text = element_text(family = "serif"))
+zplot
+```
+
+\newpage
+
+Platemaps for Z'Factors < 0:
+
+```{r platemaps, results = "asis", width.out = "30%"}
+platemap_df <- alldf %>%
+  filter(plate_zprime < 0) %>%
+  mutate(
+    well = str_extract(data.well_id, "[:alpha:][:digit:]{2}"),
+    col = str_extract(well, "[:digit:]{2}"),
+    row = str_extract(well, "[:alpha:]")
+  ) %>%
+  select(col, row, data.result, summary_zfactor, coi, data.plate_id) %>%
+  distinct() %>%
+  mutate(
+    nice_coi = str_remove(coi, "\\-[:digit:]+"),
+    row = factor(row, levels = sort(LETTERS[1:8], decreasing = TRUE)),
+    col = factor(
+      col,
+      levels = c(
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07",
+        "08",
+        "09",
+        "10",
+        "11",
+        "12"
+      )
+    )
+  )
+
+for (plate in unique(platemap_df$data.plate_id)) {
+  cat("#### ", plate, " Platemap")
+  cat("\n")
+  forplot_df <- platemap_df %>%
+    filter(data.plate_id == plate)
+  plate_plot <- ggplot(data = forplot_df, aes(x = col, y = row, fill = data.result)) +
+    geom_tile(color = "black", linewidth = 1) +
+    scale_fill_viridis_c(option = "magma") +
+    geom_text(color = "white",
+              size = 2,
+              aes(label = nice_coi)) +
+    coord_fixed() +
+    labs(
+      title = paste("Plate", plate),
+      x = "Column",
+      y = "Row",
+      fill = "Raw RLU"
+    ) +
+    theme(text = element_text(family = "serif"))
+  print(plate_plot)
+  cat("\\newpage")
+}
+
+```
+
+\newpage
+
+## %CV
+
+```{r cvcutoff}
+cvcutoff_tab <- alldf %>%
+  select(assay_type, cv_cutoff) %>%
+  distinct()
+names(cvcutoff_tab) <- c("Assay Type", "Summary %CV Cutoff")
+kable(cvcutoff_tab)
+```
+
+```{r cvs, out.width = "70%"}
+cvplot <- alldf %>%
+  select(experiment_id,
+         experiment_type,
+         assay_type,
+         start_date,
+         summary_cv,
+         cv_cutoff) %>%
+  arrange(assay_type, experiment_id) %>%
+  distinct() %>%
+  mutate(
+    qc_flag = case_when(summary_cv > cv_cutoff ~ "High Summary %CV", TRUE ~ "Passed QC"),
+    qc_flag = factor(qc_flag, levels = c("Passed QC", "High Summary %CV"))
+  ) %>%
+  ggplot(aes(x = assay_type, y = summary_cv)) +
+  geom_boxplot(outliers = FALSE) +
+  geom_quasirandom(size = 3,
+                   alpha = .6,
+                   aes(color = experiment_id, shape = qc_flag)) +
+  scale_color_viridis_d(end = .9) +
+  theme_bw() +
+  labs(
+    x = "Assay Type",
+    y = "Summary %CV",
+    color = "Experiment ID",
+    shape = "Summary %CV",
+    title = "%CV"
+  ) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    text = element_text(family = "serif")
+  )
+
+cvplot 
+```
+
+\newpage
+
+# Initial Screen
+
+```{r initial_screen_plots, results = "asis"}
+all_cois <- unique(alldf$coi)
+ctrls <- c(ctrl0, ctrl100, all_cois[grepl("VPC|VCP", all_cois)], "Enzalutamide")
+ordered_cois <- c(ctrls, sort(all_cois[!(all_cois %in% ctrls)]))
+ordered_cois <- str_remove(ordered_cois, "MCULE-")
+screen <- alldf %>%
+  filter(assay_type == "Screen") %>%
+  mutate(
+    coi_lab = str_remove(coi, "MCULE-"),
+    coi_lab = factor(coi_lab, levels = ordered_cois)
+  )
+exps <- screen %>%
+  select(experiment_id, start_date) %>%
+  distinct() %>%
+  arrange(start_date) %>%
+  distinct(experiment_id) %>%
+  as.list()
+
+color_break_range <- range(screen$summary_zfactor[screen$summary_zfactor > -Inf], na.rm = TRUE)
+color_quantiles <- unname(quantile(color_break_range))
+color_breaks <- sort(c(0, round(color_quantiles, 2)))
+
+colors <- color_breaks %>%
+  as.data.frame() %>%
+  mutate(
+    color = case_when(
+      color_breaks >= .5 ~ "#2D1160FF",
+      color_breaks < .5 &
+        color_breaks >= -10 ~ "#B63679FF",
+      TRUE ~ "#FEAF77FF"
+    )
+  ) %>%
+  select(color) %>%
+  as.list()
+
+for (exp in exps$experiment_id) {
+  cat("##", exp, "All Compounds")
+  cat("\n")
+  forplot <- screen %>%
+    filter(experiment_id == exp)
+  screenplot <- ggplot(data = forplot, aes(x = coi_lab, y = normed_results)) +
+    geom_boxplot() +
+    geom_quasirandom(aes(color = summary_zfactor), alpha = .6) +
+    theme_bw() +
+    labs(
+      title = paste("Experiment", exp),
+      x = "Compound",
+      y = "Percent Control RLU",
+      color = "ZFactor"
+    ) +
+    scale_color_gradientn(
+      colors = colors$color,
+      breaks = color_breaks,
+      limits = c(
+        min(screen$summary_zfactor[screen$summary_zfactor > -Inf], na.rm = TRUE),
+        max(screen$summary_zfactor, na.rm = TRUE)
+      )
+    ) +
+    # scale_color_gradient2(low = "red", mid = "purple", high = "blue", midpoint = -1, na.value = "black", limits = c(min(screen$summary_zfactor[screen$summary_zfactor > -Inf], na.rm = TRUE), max(screen$summary_zfactor, na.rm = TRUE))) +
+    theme(
+      axis.text.x = element_text(
+        angle = 90,
+        hjust = 1,
+        size = 7
+      ),
+      legend.key.height = unit(1, "cm"),
+      legend.key.width = unit(.3, "cm"),
+      legend.text = element_text(size = 7),
+      plot.margin = unit(c(.1, .1, .1, .1), "cm"),
+      axis.text = element_text(size = 8),
+      text = element_text(family = "serif")
+    )
+  print(screenplot)
+  cat("\\newpage")
+}
+```
+
+# Dose Response
+
+# Counter Screen
