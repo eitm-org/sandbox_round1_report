@@ -28,6 +28,7 @@ library(ggbeeswarm)
 library(tidyverse)
 library(kableExtra)
 library(viridis)
+library(paletteer)
 knitr::opts_chunk$set(echo = FALSE,
                       message = FALSE,
                       fig.align = "center")
@@ -155,6 +156,7 @@ alldf <- bind_rows(screen, drc) %>%
     ctrl = case_when(
       coi == ctrl0 ~ "0% control",
       coi == ctrl100 ~ "100% control",
+      grepl("VPC|VCP|Enzalutamide", coi) ~ "control compound",
       coi == "what the " ~ "what the ",
       TRUE ~ "sample"
     )
@@ -228,9 +230,22 @@ alldf <- bind_rows(screen, drc) %>%
   group_by(assay_type) %>%
   mutate(cv_cutoff = quantile(summary_cv, prob = .75) + 1.5 * IQR(summary_cv)) %>%
   unnest(cols = c(data)) %>%
-  ungroup()
+  ungroup() %>%
+  #designate hits
+    #group by replicate group (over experiments)
+  group_by(experiment_id, coi, coi_dose, ctrl) %>%
+  mutate(exp_mean_pc = mean(normed_results, na.rm = TRUE)) %>%
+  group_by(experiment_id) %>%
+  mutate(exp_mean_ctrl100_pc = mean(normed_results[ctrl == "100% control"], na.rm = TRUE),
+         exp_sd_ctrl100_pc = sd(normed_results[ctrl == "100% control"], na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(scr_hit = case_when(assay_type == "Screen" & exp_mean_pc < (exp_mean_ctrl100_pc - 3*exp_sd_ctrl100_pc) & ctrl == "sample" ~ "hit",
+                             assay_type == "Screen" ~ "not a hit",
+                             assay_type != "Screen" ~ "not a screen"),
+         scr_hit = factor(scr_hit, levels = c(
+           "not a hit", "hit", "not a screen")))
 
-
+#TODO: the ctrl column now includes designation of "control compounds" for enz and vpc-- make sure to make corresponding edits in ur code (to avoid redundancy)
 ```
 
 
@@ -362,7 +377,7 @@ platemap_df <- alldf %>%
     col = str_extract(well, "[:digit:]{2}"),
     row = str_extract(well, "[:alpha:]")
   ) %>%
-  select(col, row, data.result, summary_zfactor, coi, data.plate_id) %>%
+  select(experiment_id, col, row, data.result, summary_zfactor, coi, data.plate_id) %>%
   distinct() %>%
   mutate(
     nice_coi = str_remove(coi, "\\-[:digit:]+"),
@@ -387,6 +402,7 @@ platemap_df <- alldf %>%
   )
 
 for (plate in unique(platemap_df$data.plate_id)) {
+  exp <- unique(platemap_df[platemap_df$data.plate_id == plate, "experiment_id"])[[1]]
   cat("#### ", plate, " Platemap")
   cat("\n")
   forplot_df <- platemap_df %>%
@@ -399,7 +415,7 @@ for (plate in unique(platemap_df$data.plate_id)) {
               aes(label = nice_coi)) +
     coord_fixed() +
     labs(
-      title = paste("Plate", plate),
+      title = paste("Experiment", exp, ", Plate", plate),
       x = "Column",
       y = "Row",
       fill = "Raw RLU"
@@ -465,11 +481,10 @@ cvplot
 
 # Initial Screen
 
-```{r initial_screen_plots, results = "asis"}
+```{r initial_screen_plots, results = "asis", warning = FALSE}
 all_cois <- unique(alldf$coi)
 ctrls <- c(ctrl0, ctrl100, all_cois[grepl("VPC|VCP", all_cois)], "Enzalutamide")
-ordered_cois <- c(ctrls, sort(all_cois[!(all_cois %in% ctrls)]))
-ordered_cois <- str_remove(ordered_cois, "MCULE-")
+ordered_cois <- c(ctrls, sort(str_remove(all_cois[!(all_cois %in% ctrls)], "MCULE-")))
 screen <- alldf %>%
   filter(assay_type == "Screen") %>%
   mutate(
@@ -505,15 +520,18 @@ for (exp in exps$experiment_id) {
   cat("\n")
   forplot <- screen %>%
     filter(experiment_id == exp)
+  ctrl100 <- as.list(forplot[forplot$ctrl == "100% control", "normed_results"])$normed_results
+  ctrl100_mean_3sd <- mean(ctrl100, na.rm = TRUE) - 3 * sd(ctrl100, na.rm = TRUE)
   screenplot <- ggplot(data = forplot, aes(x = coi_lab, y = normed_results)) +
     geom_boxplot() +
-    geom_quasirandom(aes(color = summary_zfactor), alpha = .6) +
+    geom_quasirandom(aes(color = summary_zfactor, shape = scr_hit), alpha = .6) +
     theme_bw() +
     labs(
       title = paste("Experiment", exp),
       x = "Compound",
       y = "Percent Control RLU",
-      color = "ZFactor"
+      color = "ZFactor",
+      shape = "Hit?"
     ) +
     scale_color_gradientn(
       colors = colors$color,
@@ -536,11 +554,48 @@ for (exp in exps$experiment_id) {
       plot.margin = unit(c(.1, .1, .1, .1), "cm"),
       axis.text = element_text(size = 8),
       text = element_text(family = "serif")
-    )
+    ) +
+    geom_hline(yintercept = ctrl100_mean_3sd) +
+    ylim(c(0, max(forplot$normed_results, na.rm = TRUE)))
   print(screenplot)
   cat("\\newpage")
 }
 ```
+
+```{r hitplots, warning = FALSE}
+exps_w_hits <- alldf %>%
+  filter(scr_hit == "hit")
+
+forplot <- alldf %>%
+  filter(experiment_id %in% exps_w_hits$experiment_id) %>%
+  filter(scr_hit == "hit" | coi == "Enzalutamide" | grepl("VPC|VCP", coi) | ctrl != "sample") %>%
+  mutate(
+    coi_lab = str_remove(coi, "MCULE-"),
+    coi_lab = factor(coi_lab, levels = ordered_cois),
+    ctrl_lab = case_when(grepl("control", ctrl) ~ "control",
+                         TRUE ~ "sample")
+  )
+hplot <- ggplot(data = forplot, aes(x = coi_lab, y = normed_results)) +
+  facet_grid(rows = vars(experiment_id), scales = "free_x") +
+  geom_boxplot(outliers = FALSE) +
+  geom_quasirandom(size = 2, alpha = .6, aes(color = ctrl_lab)) +
+  theme_bw() +
+  theme(text = element_text(family = "serif"),
+        legend.position = "none",
+        axis.text.x = element_text(
+        angle = 90,
+        hjust = 1,
+        size = 7
+      )) +
+  scale_color_paletteer_d("nord::algoma_forest") +
+  ylim(c(0, max(forplot$normed_results))) +
+  labs(x = "Compound",
+       y = "Percent Control RLU",
+       title = "Designated Hits from Initial Screen")
+hplot
+```
+
+COMPARE TO MICHAEL'S HITS!
 
 # Dose Response
 
