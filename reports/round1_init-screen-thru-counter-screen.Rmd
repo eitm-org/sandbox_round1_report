@@ -29,6 +29,9 @@ library(tidyverse)
 library(kableExtra)
 library(viridis)
 library(paletteer)
+
+source(here("R", "functions.R"))
+
 knitr::opts_chunk$set(echo = FALSE,
                       message = FALSE,
                       fig.align = "center")
@@ -101,32 +104,67 @@ drc <- readRDS(here("data", "drc_data.rds")) %>%
   ) %>%
   distinct()
 
+binding <- readRDS(here("data", "binding_data.rds")) %>%
+  unnest(cols = data, names_sep = ".") %>%
+  select(
+    study_name,
+    study_rid,
+    experiment_name,
+    experiment_rid,
+    experiment_id,
+    experiment_type,
+    assay_type,
+    container,
+    start_date,
+    instrument,
+    sop,
+    data.plate_id,
+    data.replicate_group,
+    data.drug_name,
+    data.drug_id,
+    data.concentration,
+    data.units,
+    sample_id,
+    data.well_id,
+    data.result,
+    data.plate_cv,
+    data.plate_z_prime,
+    data.norm_result
+  ) %>%
+  distinct()
+
+#add dmso to binding
+meta <- binding %>%
+  select(
+    study_name,
+    study_rid,
+    experiment_name,
+    experiment_rid,
+    experiment_id,
+    experiment_type,
+    assay_type,
+    container,
+    start_date,
+    instrument,
+    sop,
+    sample_id,
+    data.plate_id,
+    data.replicate_group,
+    data.well_id,
+    data.result,
+    data.plate_cv,
+    data.plate_z_prime,
+    data.norm_result
+    ) %>%
+  distinct() %>%
+  mutate(data.drug_name = "DMSO",
+         data.concentration = .1,
+         data.units = "%")
+
 ctrl_list <- c(ctrl0, ctrl100)
-get_coi <- function(data, ctrl_list) {
-  drug_list <- unique(data$data.drug_name)
-  ndrug <- length(drug_list)
-  noctrls_list <- drug_list[!(drug_list %in% ctrl_list)]
-  if (length(noctrls_list) > 1) {
-    return("what the ")
-  } else if (length(noctrls_list) == 1) {
-    return(unlist(noctrls_list))
-  } else if (length(noctrls_list) == 0) {
-    if (ctrl100 %in% drug_list) {
-      return(ctrl100)
-    } else if (ctrl0 %in% drug_list) {
-      return(ctrl0)
-    } else {
-      return("blank well")
-    }
-  }
-}
+other_reagents <- c("FL AL Green", "AR  Screeining Buffer", "AR-LBD (GST)")
 
-get_coi_concentration <- function(data, coi) {
-  coi_conc <- data[data$data.drug_name == coi, "data.concentration"][[1]]
-  return(coi_conc)
-}
-
-alldf <- bind_rows(screen, drc) %>%
+alldf <- bind_rows(screen, drc, binding, meta) %>%
   #first, designate controls and designate "compound of interest"
   #to do that, we have to nest by well (and keep all other columns outside of the nested part)
   group_by(
@@ -151,7 +189,7 @@ alldf <- bind_rows(screen, drc) %>%
   ) %>%
   nest() %>%
   mutate(
-    coi = map(data, get_coi, ctrl_list),
+    coi = map(data, get_coi, ctrl_list, other_reagents),
     coi_dose = map2(data, coi, get_coi_concentration),
     ctrl = case_when(
       coi == ctrl0 ~ "0% control",
@@ -163,6 +201,11 @@ alldf <- bind_rows(screen, drc) %>%
   ) %>%
   unnest(cols = c(ctrl, coi, coi_dose)) %>%
   ungroup() %>%
+  #plate 1498, 1499, 1500. rows f and g were mislabelled "r1881" when they should be blank wells
+  mutate(coi = case_when(data.plate_id %in% c(1498, 1499, 1500) & grepl("F|G", data.well_id) ~ "blank well",
+                         TRUE ~ coi),
+         ctrl = case_when(data.plate_id %in% c(1498, 1499, 1500) & grepl("F|G", data.well_id) ~ "blank well",
+                         TRUE ~ ctrl)) %>%
   #next, calculate mean and sd result for each replicate group
   group_by(experiment_id, data.plate_id, coi, coi_dose, ctrl) %>%
   mutate(
@@ -212,17 +255,17 @@ alldf <- bind_rows(screen, drc) %>%
     ),
     summary_zfactor = case_when(
       assay_type == "Screen" ~ exp_zfactor,
-      assay_type == "Dose Response Curve" ~ plate_zfactor
+      assay_type == "Dose Response Curve" | assay_type == "Polar Binding" ~ plate_zfactor
     ),
     summary_zprime = case_when(
       assay_type == "Screen" ~ exp_zprime,
-      assay_type == "Dose Response Curve" ~ plate_zprime
+      assay_type == "Dose Response Curve" | assay_type == "Polar Binding" ~ plate_zprime
     ),
     summary_cv = case_when(
       assay_type == "Screen" ~ exp_cv,
-      assay_type == "Dose Response Curve" ~ plate_cv
+      assay_type == "Dose Response Curve" | assay_type == "Polar Binding" ~ plate_cv
     ),
-    assay_type = factor(assay_type, levels = c("Screen", "Dose Response Curve"))
+    assay_type = factor(assay_type, levels = c("Screen", "Dose Response Curve", "Polar Binding"))
   ) %>%
   #calculate cv cutoffs
   group_by(experiment_id, summary_cv, assay_type) %>%
@@ -243,8 +286,23 @@ alldf <- bind_rows(screen, drc) %>%
                              assay_type == "Screen" ~ "not a hit",
                              assay_type != "Screen" ~ "not a screen"),
          scr_hit = factor(scr_hit, levels = c(
-           "not a hit", "hit", "not a screen")))
+           "not a hit", "hit", "not a screen")),
+         #calculate fold change from 0% control
+         fc_ctrl0 = data.result/plate_mean_ctrl0,
+         #calculate separation from 100% control
+         sep_ctrl100 = case_when(assay_type == "Screen" ~ 1 - (3 * (exp_sd_ctrl100 + exp_sd_res) / (exp_mean_ctrl100 - exp_mean_res)),
+                                 assay_type %in% c("Dose Response Curve", "Polar Binding") ~ 1 - (3 * (plate_sd_ctrl100 + plate_sd_res) / (plate_mean_ctrl100 - plate_mean_res))))
 
+
+#make a nice version of the MCULE-XXXXXXX labels for plots
+all_cois <- unique(alldf$coi)
+ctrls <- c(ctrl0, ctrl100, "Enzalutamide", all_cois[grepl("VPC|VCP", all_cois)])
+ordered_cois <- c(ctrls, sort(str_remove(all_cois[!(all_cois %in% ctrls)], "MCULE-")))
+alldf <- alldf %>%
+  mutate(
+    coi_lab = str_remove(coi, "MCULE-"),
+    coi_lab = factor(coi_lab, levels = ordered_cois)
+  )
 #TODO: the ctrl column now includes designation of "control compounds" for enz and vpc-- make sure to make corresponding edits in ur code (to avoid redundancy)
 ```
 
@@ -272,6 +330,7 @@ qctab <- alldf %>%
     )
   ) %>%
   select(experiment_id,
+         data.plate_id,
          experiment_type,
          assay_type,
          start_date,
@@ -281,6 +340,7 @@ qctab <- alldf %>%
   arrange(assay_type, experiment_id)
 names(qctab) <- c(
   "Experiment ID",
+  "Plate ID",
   "Experiment Type",
   "Assay Type",
   "Start Date",
@@ -378,26 +438,15 @@ platemap_df <- alldf %>%
     row = str_extract(well, "[:alpha:]")
   ) %>%
   select(experiment_id, col, row, data.result, summary_zfactor, coi, data.plate_id) %>%
-  distinct() %>%
+  distinct()
+
+platemap_df <- platemap_df %>%
   mutate(
     nice_coi = str_remove(coi, "\\-[:digit:]+"),
-    row = factor(row, levels = sort(LETTERS[1:8], decreasing = TRUE)),
+    row = factor(row, levels = sort(unique(platemap_df$row), decreasing = TRUE)),
     col = factor(
       col,
-      levels = c(
-        "01",
-        "02",
-        "03",
-        "04",
-        "05",
-        "06",
-        "07",
-        "08",
-        "09",
-        "10",
-        "11",
-        "12"
-      )
+      levels = sort(unique(platemap_df$col))
     )
   )
 
@@ -482,6 +531,11 @@ cvplot
 # Initial Screen
 
 ```{r initial_screen_plots, results = "asis", warning = FALSE}
+
+ # %>%
+ #    mutate(summary_zfactor = case_when(ctrl == "compound control" ~ NA,
+ #                                       TRUE ~ summary_zfactor))
+
 all_cois <- unique(alldf$coi)
 ctrls <- c(ctrl0, ctrl100, all_cois[grepl("VPC|VCP", all_cois)], "Enzalutamide")
 ordered_cois <- c(ctrls, sort(str_remove(all_cois[!(all_cois %in% ctrls)], "MCULE-")))
@@ -491,6 +545,7 @@ screen <- alldf %>%
     coi_lab = str_remove(coi, "MCULE-"),
     coi_lab = factor(coi_lab, levels = ordered_cois)
   )
+#write list of experiments
 exps <- screen %>%
   select(experiment_id, start_date) %>%
   distinct() %>%
@@ -561,6 +616,9 @@ for (exp in exps$experiment_id) {
   cat("\\newpage")
 }
 ```
+\newpage
+
+## Designated Hits
 
 ```{r hitplots, warning = FALSE}
 exps_w_hits <- alldf %>%
@@ -570,8 +628,6 @@ forplot <- alldf %>%
   filter(experiment_id %in% exps_w_hits$experiment_id) %>%
   filter(scr_hit == "hit" | coi == "Enzalutamide" | grepl("VPC|VCP", coi) | ctrl != "sample") %>%
   mutate(
-    coi_lab = str_remove(coi, "MCULE-"),
-    coi_lab = factor(coi_lab, levels = ordered_cois),
     ctrl_lab = case_when(grepl("control", ctrl) ~ "control",
                          TRUE ~ "sample")
   )
@@ -597,6 +653,68 @@ hplot
 
 COMPARE TO MICHAEL'S HITS!
 
+\newpage
+
 # Dose Response
 
+```{r drcs, results = "asis"}
+#TODO: color code all mcules, ctrls
+#get all the cois that have dose response curves
+drc_exps <- alldf %>%
+  filter(assay_type == "Dose Response Curve")
+coi_list <- drc_exps %>%
+  filter(ctrl == "sample") %>%
+  select(coi) %>%
+  distinct() %>%
+  #this is how u get it to be a cute vector within the dplyr chunk....
+  as.vector() %>%
+  unname() %>%
+  unlist() %>%
+  sort()
+
+lapply(coi_list, get_raw_drc_plot, drc_exps)
+
+#TODO: add comment about dose
+```
+
+\newpage
+
+# Polar Binding
+
+```{r polar_binding_drcs}
+drc_exps <- alldf %>%
+  filter(assay_type == "Dose Response Curve")
+coi_list <- drc_exps %>%
+  filter(ctrl == "sample") %>%
+  select(coi) %>%
+  distinct() %>%
+  #this is how u get it to be a cute vector within the dplyr chunk....
+  as.vector() %>%
+  unname() %>%
+  unlist() %>%
+  sort()
+
+lapply(coi_list, get_raw_drc_plot, drc_exps)
+
+```
+
+
+
 # Counter Screen
+
+```{r polar_binding_drcs}
+polar_exps <- alldf %>%
+  filter(assay_type == "Polar Binding")
+
+coi_list <- polar_exps %>%
+  filter(ctrl == "sample") %>%
+  select(coi) %>%
+  distinct() %>%
+  #this is how u get it to be a cute vector within the dplyr chunk....
+  as.vector() %>%
+  unname() %>%
+  unlist() %>%
+  sort()
+
+lapply(coi_list, get_raw_drc_plot, polar_exps)
+```
