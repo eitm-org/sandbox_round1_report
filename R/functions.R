@@ -80,7 +80,7 @@ get_normed_plot <- function(df, min_y, max_y) {
       #TODO: add a test that checks that none of these doses are NA
       max_dose <- max(model_df$data[[1]]$coi_dose, na.rm = TRUE)
       #get points to draw the curve
-      curve.data.drc <- PR(model, xVec = seq_log(min_dose, max_dose))
+      curve.data.drc <- PR(model, xVec = pracma::logseq(min_dose, max_dose, n = 100))
       curve.data <- data.frame(y = as.vector(unlist(curve.data.drc)), x = as.numeric(names(curve.data.drc)))
       #add the drc curve to the plot
       outplot <- outplot +
@@ -88,12 +88,18 @@ get_normed_plot <- function(df, min_y, max_y) {
       #           , linetype = linetype) +
       # annotate("label", x = label_x_plotter, hjust = 1, y = label_y_plotter, label = this_date, color = this_color, size = 4,
       #          family = "serif")
+      #add vertical line for absolute ec50
+      abs_ec50 <- model_df$abs_ec50
+      if (!is.nan(abs_ec50 & !is.na(abs_ec50))) {
+        outplot <- outplot +
+          geom_vline(xintercept = abs_ec50, alpha = .5, linetype = 5, linewidth = .5)
+      }
     }
   }
   return(outplot)
 }
 
-print_drcs <- function(mcule, drc_exps) {
+print_drcs <- function(mcule, drc_exps, raw_plot_ylab = "input raw plot ylab") {
   cat("## ", mcule)
   cat("\n")
   cat(mcule, "Raw Plot")
@@ -142,7 +148,7 @@ print_drcs <- function(mcule, drc_exps) {
     labs(
       title = paste(mcule, "Raw Dose Response"),
       x = "Dose",
-      y = "Raw RLU",
+      y = raw_plot_ylab,
       color = "Plate\nID",
       shape = "Compound"
     ) +
@@ -220,16 +226,14 @@ print_drcs <- function(mcule, drc_exps) {
   names(mcule_stats) <- c("Experiment", "Plate", "Absolute EC50", "Absolute EC50 CI",
                           "Relative EC50", "Relative EC50 CI", "RSE", "RSE Cutoff", "Extrapolated Relative C50", "Extrapolated Absolute EC50")
   cat("\n")
-  kable(mcule_stats, digits = 3)
+
+  print(kable(mcule_stats, digits = 3))
+
   cat("\n")
   cat("\\newpage")
   cat("\n")
 
 }
-
-
-#TODO: put this at the top
-library(StratigrapheR)
 
 does_it_model <- function(df) {
   tryCatch({
