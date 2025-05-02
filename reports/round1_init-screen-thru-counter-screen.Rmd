@@ -30,11 +30,20 @@ library(tidyverse)
 library(patchwork)
 library(conflicted)
 library(kableExtra)
+library(testthat)
+library(devtools)
 library(viridis)
 library(drc)
+library(usethis)
 library(paletteer)
 library(kableExtra)
+library(pracma)
 
+#TODO: load these in a function
+source(here("R", "plot_plate_zfactors.R"))
+source(here("R", "plot_zfactor_outliers.R"))
+source(here("R", "plot_platemap.R"))
+source(here("R", "print_platemap.R"))
 source(here("R", "functions.R"))
 
 knitr::opts_chunk$set(echo = FALSE,
@@ -110,18 +119,18 @@ best_ec50_drc <- stats %>%
   filter(good_abs_ic50 == "good") %>%
   filter(assay_type == "Dose Response Curve") %>% 
   filter(ctrl == "sample") %>%
-  select(experiment_id, coi, abs_ec50, rel_ec50) %>%
-  arrange(abs_ec50)
-names(best_ec50_drc) <- c("Experiment", "Compound", "Absolute EC50", "Relative EC50")
+  select(experiment_id, experiment_name, coi, abs_ec50, rel_ec50) %>%
+  arrange(coi, experiment_id)
+# names(best_ec50_drc) <- c("Experiment ID", "Experiment Name", "Compound", "Absolute EC50", "Relative EC50")
 
 best_ec50_pb <- stats %>% 
   filter(good_rel_ic50 == "good") %>% 
   filter(good_abs_ic50 == "good") %>%
   filter(assay_type == "Polar Binding") %>% 
   filter(ctrl == "sample") %>%
-  select(experiment_id, coi, abs_ec50, rel_ec50) %>%
-  arrange(abs_ec50)
-names(best_ec50_drc) <- c("Experiment", "Compound", "Absolute EC50", "Relative EC50")
+  select(experiment_id, experiment_name, coi, abs_ec50, rel_ec50) %>%
+  arrange(coi, experiment_id)
+# names(best_ec50_drc) <- c("Experiment ID", "Experiment Name", "Compound", "Absolute EC50", "Relative EC50")
 
 ```
 
@@ -132,7 +141,10 @@ names(best_ec50_drc) <- c("Experiment", "Compound", "Absolute EC50", "Relative E
     * `r nrow(best_ec50_drc)` compounds produced reliable relative and absolute EC50s (not extrapolated, RSE's below quantile outlier cutoff). In the table below, they are sorted by Absolute EC50.
 
 ```{r drc_ec50_tab}
-kable(best_ec50_drc, digits = 2)
+fortab <- best_ec50_drc %>%
+  select(-c(experiment_id, rel_ec50))
+names(fortab) <- c("Experiment Name", "Compound", "Absolute EC50")
+kable(fortab, digits = 2)
 ```
 
 * Polar Binding Dose Response
@@ -140,7 +152,10 @@ kable(best_ec50_drc, digits = 2)
     * `r nrow(best_ec50_pb)` compounds produced reliable relative and absolute EC50s (not extrapolated, RSE's below quantile outlier cutoff). In the table below, they are sorted by Absolute EC50.
 
 ```{r pb_ec50_tab}
-kable(best_ec50_pb, digits = 2)
+for_tab <- best_ec50_pb %>%
+  select(-c(experiment_id, rel_ec50))
+names(for_tab) <- c("Experiment Name", "Compound", "Absolute EC50")
+kable(for_tab, digits = 2)
 ```
 
 \newpage
@@ -219,74 +234,13 @@ A Z'Factor above 0 is considered sufficient at EMI.
 \newpage
  
 ```{r qcbox, out.width = "80%"}
-qcplot <- alldf %>%
-  select(experiment_id,
-         experiment_type,
-         assay_type,
-         start_date,
-         plate_zprime) %>%
-  arrange(assay_type, experiment_id) %>%
-  distinct() %>%
-  mutate(
-    qc_flag = case_when(plate_zprime < 0 ~ "Z'Factor < 0", TRUE ~ "Passed QC"),
-    qc_flag = factor(qc_flag, levels = c("Passed QC", "Z'Factor < 0"))
-  ) %>%
-  ggplot(aes(x = assay_type, y = plate_zprime)) +
-  geom_boxplot(outliers = FALSE) +
-  geom_quasirandom(size = 3,
-                   alpha = .6,
-                   aes(color = experiment_id, shape = qc_flag)) +
-  scale_color_viridis_d(end = .9) +
-  theme_bw() +
-  labs(
-    x = "Assay Type",
-    y = "Plate Z'Factor",
-    color = "Experiment ID",
-    shape = "QC Flag",
-    title = "Z'Factors by Plate"
-  ) +
-  theme(
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    panel.background = element_blank(),
-    text = element_text(family = "serif")
-  )
-
-#TODO: add ylim
-
-qcplot 
+print(plot_plate_zfactors(alldf))
 ```
 
 The above plot shows Z'factors calculated for each plate. There are `r nrow(unique(alldf[alldf$plate_zprime < 0, "data.plate_id"]))` plates with Z'factors less than 0. These plates are numbered: `r paste(unique(alldf[alldf$plate_zprime < 0, "data.plate_id"])[[1]], collapse = ", ")`.
 
 ```{r zprime, fig.height = 6, fig.width = 8}
-zplot <- alldf %>%
-  filter(plate_zprime < 0 | plate_zprime > 20) %>%
-  mutate(
-    nice_label = paste(assay_type, "Exp", experiment_id, "Plate", data.plate_id),
-    nice_ctrl = case_when(
-      ctrl == "100% control" ~ "100%\ncontrol",
-      ctrl == "0% control" ~ "0%\ncontrol",
-      ctrl == "control compound" ~ "control\ncompound",
-      TRUE ~ ctrl
-    )
-  ) %>%
-  ggplot(aes(x = nice_ctrl, y = data.result)) +
-  facet_wrap(~ nice_label, scales = "free") +
-  geom_boxplot(outliers = FALSE) +
-  geom_quasirandom(size = 3, alpha = .5, aes(color = coi)) +
-  scale_color_viridis_d(guide = "none", end = .8) +
-  # scale_color_gradient2(high = "#7E98AB", mid = "#841E5AFF", low = "#F06043FF",  midpoint = 0.5, na.value = "#000004FF") +
-  theme_bw() +
-  labs(
-    title = "Raw Signal for Z'Factor Outliers",
-    y = "Raw RLU",
-    x = "Control",
-    caption = "note differences in scale\nPoints colored by compound.",
-    color = "Z Factor"
-  ) +
-  theme(text = element_text(family = "serif"))
-zplot
+print(plot_zfactor_outliers(alldf))
 ```
 
 These plots show that high variability in 100% control conditions are likely the cause for the low Z'Factors in this plate. 
@@ -299,49 +253,36 @@ For further examination, below are plate heat maps for each plate with a Z'Facto
 
 ```{r platemaps, results = "asis", width.out = "30%"}
 platemap_df <- alldf %>%
-  filter(plate_zprime < 0 | plate_zprime > 3) %>%
+  #filter for only plates with weird zprime factors
+  #TODO: designate a parameter for this report to standardize upper bound for plate z'factor
+  #(eventually, we'll want to have somewhere easy we can plug in this "20")
+  filter(plate_zprime < 0 | plate_zprime > 20) %>%
   mutate(
+    #get rows and columns from well id
     well = str_extract(data.well_id, "[:alpha:][:digit:]{2}"),
     col = str_extract(well, "[:digit:]{2}"),
     row = str_extract(well, "[:alpha:]")
   ) %>%
-  select(experiment_id, col, row, data.result, summary_zfactor, coi, data.plate_id) %>%
+  select(experiment_id, col, row, assay_type, data.result, summary_zfactor, coi, data.plate_id) %>%
   distinct()
 
 platemap_df <- platemap_df %>%
   mutate(
+    #remove molecule numbers from sample wells
+    #if we kept those in, the platemap would look too cluttered
+    #for the purposes of the platemap, we only really care about the differences between samples and controls, anyways
     nice_coi = str_remove(coi, "\\-[:digit:]+"),
+    #make row and col columns factors
     row = factor(row, levels = sort(unique(platemap_df$row), decreasing = TRUE)),
     col = factor(
       col,
       levels = sort(unique(platemap_df$col))
     )
   )
-
-for (plate in unique(platemap_df$data.plate_id)) {
-  exp <- unique(platemap_df[platemap_df$data.plate_id == plate, "experiment_id"])[[1]]
-  cat("#### ", plate, " Platemap")
-  cat("\n")
-  forplot_df <- platemap_df %>%
-    filter(data.plate_id == plate)
-  plate_plot <- ggplot(data = forplot_df, aes(x = col, y = row, fill = data.result)) +
-    geom_tile(color = "black", linewidth = 1) +
-    scale_fill_viridis_c(option = "magma") +
-    geom_text(color = "white",
-              size = 2,
-              aes(label = nice_coi)) +
-    coord_fixed() +
-    labs(
-      title = paste("Experiment", exp, ", Plate", plate),
-      x = "Column",
-      y = "Row",
-      fill = "Raw RLU"
-    ) +
-    theme(text = element_text(family = "serif"))
-  print(plate_plot)
-  cat("\\newpage")
-}
-
+#get all plates that have been found to have weird z'factors
+plates <- unique(platemap_df$data.plate_id)
+#print platemaps
+lapply(plates, print_platemap, platemap_df = platemap_df)
 ```
 
 \newpage
@@ -456,10 +397,6 @@ In total, `r nrow(unique(alldf[grepl("SD hit", alldf$scr_hit), "coi"]))` had an 
 
 ```{r initial_screen_plots, results = "asis", warning = FALSE}
 
- # %>%
- #    mutate(summary_zfactor = case_when(ctrl == "compound control" ~ NA,
- #                                       TRUE ~ summary_zfactor))
-
 all_cois <- unique(alldf$coi)
 ctrls <- c(ctrl0, ctrl100, all_cois[grepl("VPC|VCP", all_cois)], "Enzalutamide")
 ordered_cois <- c(ctrls, sort(str_remove(all_cois[!(all_cois %in% ctrls)], "MCULE-")))
@@ -560,6 +497,68 @@ for (exp in exps$experiment_id) {
 ```
 \newpage
 
+see fold change plot
+
+```{r fcplot}
+# screen
+for_plot <- screen %>%
+  filter(ctrl == "sample") %>%
+  mutate(short_mcule_lab = as.numeric(str_extract(coi, "[:digit:]{3}$"))) %>%
+  group_by(coi, short_mcule_lab) %>%
+  summarize(fc = mean(fc_ctrl0))
+#calculate median r1881
+ctrl100_df <- screen %>%
+  filter(ctrl == "100% control")
+med_ctrl100 <- median(ctrl100_df$fc_ctrl0, na.rm = TRUE)
+#calculate median r1881 + 3sd
+sd_ctrl100 <- sd(ctrl100_df$fc_ctrl0, na.rm = TRUE)
+med_3sd_ctrl100 <- med_ctrl100 + sd_ctrl100
+
+n_hits <- nrow(for_plot[for_plot$fc > med_3sd_ctrl100, ])
+hit_rate <- n_hits / nrow(for_plot) * 100
+
+#get x hits to label on plot
+we_want_n_hits <- 13
+hit_cutoff <- for_plot %>% arrange(fc)
+labs_df <- hit_cutoff[(nrow(hit_cutoff) - we_want_n_hits + 1):nrow(hit_cutoff), ]
+
+fcplot <- ggplot(data = for_plot, aes(x = short_mcule_lab, y = fc)) +
+  geom_point(alpha = .4) +
+  theme_bw() +
+  #label hits
+  geom_label(data = labs_df, aes(x = short_mcule_lab, y = fc, label = short_mcule_lab), size = 3, vjust = 1) +
+  geom_hline(
+    yintercept = med_3sd_ctrl100,
+    color = "palevioletred",
+    linewidth = 1.3,
+    linetype = 4
+  ) +
+  #label cutoff line
+  geom_label(
+    x = max(for_plot$short_mcule_lab),
+    y = med_3sd_ctrl100,
+    label = paste0(
+      "Median+3SD 100% Control\n",
+      n_hits,
+      " FC hits ~ ",
+      round(hit_rate, 2),
+      "% hit rate"
+    ),
+    hjust = 1,
+    vjust = 1.2
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "serif")
+  ) +
+  labs(title = "Fold Change Hits", subtitle = paste(we_want_n_hits, "labelled"), y = "Fold-Induction of Luciferase", x = "Compound by Number")
+
+fcplot
+```
+
 ## Designated Hits
 
 ```{r exps_w_hits}
@@ -568,14 +567,18 @@ exps_w_hits <- alldf %>%
 ```
 
 ```{r summary_hit_tab}
-hit_tab <- exps_w_hits %>%
-  select(experiment_id, start_date, exp_cv, exp_zprime,
-         coi_lab, coi_dose, scr_hit) %>%
-  distinct() %>%
-  group_by(scr_hit) %>%
-  summarise(mcules = n())
-names(hit_tab) <- c("Cutoff Hit", "Number of Compounds")
-kable(hit_tab, digits = 3)
+# hit_tab0 <- alldf %>%
+#   filter(assay_type == "Screen") %>%
+#   group
+# 
+# hit_tab <- exps_w_hits %>%
+#   select(experiment_id, start_date, exp_cv, exp_zprime,
+#          coi_lab, coi_dose, scr_hit) %>%
+#   distinct() %>%
+#   group_by(scr_hit) %>%
+#   summarise(mcules = n())
+# names(hit_tab) <- c("Cutoff Hit", "Number of Compounds")
+# kable(hit_tab, digits = 3)
 # hit_tab
 #TODO: make this like.... more of a program not me just looking at this and saying it looks good
 ```
@@ -624,7 +627,6 @@ hit_tab <- exps_w_hits %>%
 hit_tab
 ```
 
-COMPARE TO MICHAEL'S HITS!
 
 \newpage
 
@@ -634,13 +636,19 @@ The purpose of this assay was to further investigate our hits by modelling their
 
 This was a viability assay, meaning that low RLU indicates cell death.
 
-The following table includes all compounds that achieved 50% (absolute and relative) inhibition without extrapolating. Compounds with outlier RSE's excluded.
+Response is normalized to control using this formula:
+
+$$
+\frac{\text{signal} - mean(\text{0% control signal})}{mean(\text{100% control signal}) - mean(\text{0% control signal})}
+$$
+
+The following table includes all compounds that achieved 50% (absolute and relative) inhibition without extrapolating. Compounds with outlier RSE's are excluded.
 
 ```{r drc_good_ones, results = "asis"}
 mcules_drc_ed <- stats  %>% 
   filter(assay_type == "Dose Response Curve") %>%
   filter(ctrl == "sample") %>%
-  select(experiment_id, data.plate_id, coi, abs_ec50) %>%
+  select(experiment_id, start_date, data.plate_id, coi, abs_ec50) %>%
   distinct()
 
 #TODO ^ find a better way to do this
@@ -668,16 +676,23 @@ coi_list <- drcs %>%
   unlist() %>%
   sort()
 
-lapply(coi_list, print_drcs, drcs)
+lapply(coi_list, print_drcs, drcs, "Raw RLU")
 
 #TODO: add comment about dose
 ```
 
 \newpage
 
-# Polar Binding
+# AR Polar Screen
+ 
 
-This luciferase assay is used to investigate how well our hit compounds bind to the desired target site.
+This fluorescence polarization assay is used to investigate how well our hit compounds bind to the desired target site.
+
+Response is normalized to control using this formula:
+
+$$
+\frac{\text{signal} - mean(\text{0% control signal})}{mean(\text{100% control signal}) - mean(\text{0% control signal})}
+$$
 
 The following table includes all compounds that achieved 50% relative binding without extrapolating (we have a reliable relative EC50).
 
@@ -686,7 +701,7 @@ The following table includes all compounds that achieved 50% relative binding wi
 mcules_drc_ed <- stats  %>% 
   filter(assay_type == "Polar Binding") %>%
   filter(ctrl == "sample") %>%
-  select(experiment_id, data.plate_id, coi, abs_ec50) %>%
+  select(experiment_id, start_date, experiment_name, data.plate_id, coi, abs_ec50) %>%
   distinct()
 
 kable(best_ec50_pb, digits = 3)
@@ -715,7 +730,7 @@ coi_list <- drc_exps %>%
   unlist() %>%
   sort()
 
-lapply(coi_list, print_drcs, drc_exps)
+lapply(coi_list, print_drcs, drc_exps, raw_plot_ylab = "Polarization (mP)")
 ```
 
 

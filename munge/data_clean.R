@@ -280,6 +280,8 @@ alldf <- bind_rows(screen, drc, binding, meta) %>%
     exp_sd_ctrl100_pc = sd(normed_results[ctrl == "100% control"], na.rm = TRUE)
   ) %>%
   ungroup() %>%
+  #calculate fold change from 100% control
+  mutate(fc_ctrl100 = data.result / plate_mean_ctrl100) %>%
   mutate(
     scr_hit = case_when(
       assay_type == "Screen" &
@@ -319,9 +321,7 @@ alldf <- bind_rows(screen, drc, binding, meta) %>%
         "3SD hit",
         "not a screen"
       )
-    ),
-    #calculate fold change from 0% control
-    fc_ctrl0 = data.result / plate_mean_ctrl0,
+    ))
     #calculate separation from 100% control
     sep_ctrl100 = case_when(
       assay_type == "Screen" ~ 1 - (
