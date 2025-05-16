@@ -21,24 +21,6 @@ header-includes:
 ---
 
 ```{r setup, include = FALSE}
-
-library(here)
-library(pander)
-library(ggplot2)
-library(ggbeeswarm)
-library(tidyverse)
-library(patchwork)
-library(conflicted)
-library(kableExtra)
-library(testthat)
-library(devtools)
-library(viridis)
-library(drc)
-library(usethis)
-library(paletteer)
-library(kableExtra)
-library(pracma)
-
 #TODO: load these in a function
 source(here("R", "plot_plate_zfactors.R"))
 source(here("R", "plot_zfactor_outliers.R"))
@@ -223,9 +205,7 @@ knitr::include_graphics(here("images", "zfactor_explainer.png"))
 
 Z'Factor is calculated with the following formula:
 
-$$
-\text{Z'Factor} = 1 - \frac{3*(\sigma_{c^{+}} - \sigma_{c^{-}})}{|\mu_{c^{+}} - \mu_{c^{-}}|}
-$$
+
 
 A Z'Factor above 0 is considered sufficient at EMI.
  
@@ -397,27 +377,21 @@ In total, `r nrow(unique(alldf[grepl("SD hit", alldf$scr_hit), "coi"]))` had an 
 
 ```{r initial_screen_plots, results = "asis", warning = FALSE}
 
+
 all_cois <- unique(alldf$coi)
 ctrls <- c(ctrl0, ctrl100, all_cois[grepl("VPC|VCP", all_cois)], "Enzalutamide")
 ordered_cois <- c(ctrls, sort(str_remove(all_cois[!(all_cois %in% ctrls)], "MCULE-")))
 
 screen <- alldf %>%
   filter(assay_type == "Screen") %>%
+  #TODO: remove this-- this isn't helpful for plotting
+    #just use mcule-xxxxxxxx for tables
   mutate(
     coi_lab = str_remove(coi, "MCULE-"),
     coi_lab = factor(coi_lab, levels = ordered_cois),
-    plotter_zfactor = case_when(ctrl == "control compound" ~ NA,
-                                TRUE ~ summary_zfactor)
+    plotter_zfactor = case_when(ctrl == "control compound" ~ NA, TRUE ~ summary_zfactor)
   )
-
-#write list of experiments
-exps <- screen %>%
-  select(experiment_id, start_date) %>%
-  distinct() %>%
-  arrange(start_date) %>%
-  distinct(experiment_id) %>%
-  as.list()
-
+#get color breaks for zfactor scale
 color_break_range <- range(screen$plotter_zfactor[screen$plotter_zfactor > -Inf], na.rm = TRUE)
 color_quantiles <- unname(quantile(color_break_range))
 color_breaks <- sort(c(0, round(color_quantiles, 2)))
@@ -436,106 +410,175 @@ colors <- color_breaks %>%
   select(color) %>%
   as.list()
 
-for (exp in exps$experiment_id) {
-  cat("##", exp, "All Compounds")
-  cat("\n")
-  forplot <- screen %>%
-    filter(experiment_id == exp)
-  ctrl100_results <- as.list(forplot[forplot$ctrl == "100% control", "normed_results"])$normed_results
-  
-  ctrl100_mean_3sd <- mean(ctrl100_results, na.rm = TRUE) - 3 * sd(ctrl100_results, na.rm = TRUE)
-  ctrl100_mean_4sd <- mean(ctrl100_results, na.rm = TRUE) - 4 * sd(ctrl100_results, na.rm = TRUE)
-  ctrl100_mean_5sd <- mean(ctrl100_results, na.rm = TRUE) - 5 * sd(ctrl100_results, na.rm = TRUE)
-  ctrl100_mean_6sd <- mean(ctrl100_results, na.rm = TRUE) - 6 * sd(ctrl100_results, na.rm = TRUE)
-  ctrl100_mean_7sd <- mean(ctrl100_results, na.rm = TRUE) - 7 * sd(ctrl100_results, na.rm = TRUE)
-  ctrl100_mean_8sd <- mean(ctrl100_results, na.rm = TRUE) - 8 * sd(ctrl100_results, na.rm = TRUE)
-  ctrl100_mean_9sd <- mean(ctrl100_results, na.rm = TRUE) - 9 * sd(ctrl100_results, na.rm = TRUE)
-  
-  screenplot <- ggplot(data = forplot, aes(x = coi_lab, y = normed_results)) +
-    geom_boxplot() +
-    geom_quasirandom(aes(color = plotter_zfactor), alpha = .6) +
-    theme_bw() +
-    labs(
-      title = paste("Experiment", exp),
-      x = "Compound",
-      y = "Percent Control RLU",
-      color = "ZFactor"
-    ) +
-    scale_color_gradientn(
-      colors = colors$color,
-      breaks = color_breaks,
-      limits = c(
-        min(screen$plotter_zfactor[screen$plotter_zfactor > -Inf], na.rm = TRUE),
-        max(screen$plotter_zfactor, na.rm = TRUE)
-      )
-    ) +
-    # scale_color_gradient2(low = "red", mid = "purple", high = "blue", midpoint = -1, na.value = "black", limits = c(min(screen$summary_zfactor[screen$summary_zfactor > -Inf], na.rm = TRUE), max(screen$summary_zfactor, na.rm = TRUE))) +
-    theme(
-      axis.text.x = element_text(
-        angle = 90,
-        hjust = 1,
-        size = 7
-      ),
-      legend.key.height = unit(.8, "cm"),
-      legend.key.width = unit(.3, "cm"),
-      legend.text = element_text(size = 7),
-      plot.margin = unit(c(.1, .1, .1, .1), "cm"),
-      axis.text = element_text(size = 8),
-      text = element_text(family = "serif")
-    ) +
-    geom_hline(yintercept = ctrl100_mean_3sd, linetype = "longdash") +
-    geom_hline(yintercept = ctrl100_mean_4sd, linetype = "dashed") +
-    geom_hline(yintercept = ctrl100_mean_5sd, linetype = "dotdash") +
-    geom_hline(yintercept = ctrl100_mean_6sd, linetype = "dotted") +
-    geom_hline(yintercept = ctrl100_mean_7sd, linetype = "dotdash") +
-    geom_hline(yintercept = ctrl100_mean_8sd, linetype = "dashed") +
-    geom_hline(yintercept = ctrl100_mean_9sd, linetype = "longdash") +
-    ylim(c(0, max(forplot$normed_results, na.rm = TRUE)))
-  print(screenplot)
-  cat("\\newpage")
-}
+#calculate 100% control median
+ctrl100_results <- as.list(screen[screen$ctrl == "100% control", "normed_results"])$normed_results
+ctrl100_med <- median(ctrl100_results, na.rm = TRUE)
+#calculate 100% control quantile outlier bound
+ctrl100_bound <- quantile(ctrl100_results, probs = .25)[[1]] - 1.5*IQR(ctrl100_results)
+
+#designate hits in a dataframe
+meds <- screen %>%
+  filter(ctrl == "sample") %>%
+  group_by(coi, short_mcule_lab, ctrl) %>%
+  summarize(min_fc = min(fc_ctrl100),
+            #get minimum plate z'factor for each mcule
+            min_plate_zprime = min(plate_zprime),
+            mean_rel_rlu = mean(normed_results),
+            sd_rel_rlu = sd(normed_results),
+            med_rel_rlu = median(normed_results),
+            max_rel_rlu = max(normed_results),
+            zfac100 = mean(summary_zfactor100)) %>%
+  mutate(scr_hit = case_when(max_rel_rlu < ctrl100_bound & min_plate_zprime > 0 ~ "quantile outlier hit",
+                             max_rel_rlu < ctrl100_bound ~ "rerun this compound")) %>%
+  ungroup() %>%
+  arrange(med_rel_rlu)
+
+plot_hits <- meds %>%
+  filter(scr_hit %in% c("quantile outlier hit", "rerun this compound"))
+
+screenplot <- ggplot(data = screen, aes(x = short_mcule_lab, y = normed_results)) +
+  geom_boxplot(data = screen, aes(x = short_mcule_lab, y = normed_results)) +
+  geom_point(data = screen, aes(x = short_mcule_lab, y = normed_results, color = plotter_zfactor), alpha = .6) +
+  theme_bw() +
+  labs(
+    title = paste("Screening Experiments", paste(unique(screen$experiment_id), collapse = ", ")),
+    x = "Compound",
+    y = "Percent Control RLU",
+    color = "ZFactor"
+  ) +
+  scale_color_gradientn(
+    colors = colors$color,
+    breaks = color_breaks,
+    limits = c(
+      min(screen$plotter_zfactor[screen$plotter_zfactor > -Inf], na.rm = TRUE),
+      max(screen$plotter_zfactor, na.rm = TRUE)
+    )
+  ) +
+  new_scale_color() +
+  geom_point(data = plot_hits, size = 4, alpha = .4, aes(x = short_mcule_lab, y = med_rel_rlu, color = scr_hit)) + 
+  scale_color_viridis_d(begin = .65) +
+  geom_hline(yintercept = ctrl100_bound, color = "#FEAF77FF", linewidth = 1.5) +
+  labs(color = "Hit") +
+  # scale_color_gradient2(low = "red", mid = "purple", high = "blue", midpoint = -1, na.value = "black", limits = c(min(screen$summary_zfactor[screen$summary_zfactor > -Inf], na.rm = TRUE), max(screen$summary_zfactor, na.rm = TRUE))) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.key.height = unit(.8, "cm"),
+    legend.key.width = unit(.3, "cm"),
+    legend.text = element_text(size = 7),
+    plot.margin = unit(c(.1, .1, .1, .1), "cm"),
+    axis.text = element_text(size = 8),
+    text = element_text(family = "serif")
+  ) +
+  ylim(c(0, max(screen$normed_results, na.rm = TRUE))) +
+  #label cutoff line
+  geom_label(
+    x = as.numeric(max(unique(screen$short_mcule_lab), na.rm = TRUE)),
+    y = ctrl100_bound,
+    hjust = 1.2,
+    vjust = -.6,
+    label = paste0(
+      "100% Control Quantile Outlier Bound"
+      #TODO: add this back
+      # ,
+      # n_hits,
+      # " FC hits ~ ",
+      # round(hit_rate, 2),
+      # "% hit rate"
+    )
+  )
+screenplot
 ```
 \newpage
 
 see fold change plot
 
-```{r fcplot}
-# screen
-for_plot <- screen %>%
+```{r fcplot, fig.width = 10}
+#get x hits to label on plot
+tier_1_n <- 13
+tier_2_n <- 20
+#TODO: make this an input parameter to ur script
+#make an unsummarized dataframe to add boxplots
+unsum <- screen %>%
   filter(ctrl == "sample") %>%
-  mutate(short_mcule_lab = as.numeric(str_extract(coi, "[:digit:]{3}$"))) %>%
-  group_by(coi, short_mcule_lab) %>%
-  summarize(fc = mean(fc_ctrl0))
+  mutate(short_mcule_lab = factor(as.numeric(str_extract(coi, "[:digit:]{3}$")), ordered = TRUE))
+  
+  
+# summarize fc by medians
+meds <- unsum %>%
+  group_by(coi, short_mcule_lab, ctrl) %>%
+  summarize(min_fc = min(fc_ctrl100),
+            #get minimum plate z'factor for each mcule
+            min_plate_zprime = min(plate_zprime),
+            med_fc = median(fc_ctrl100),
+            mean_rel_rlu = mean(normed_results),
+            sd_rel_rlu = sd(normed_results),
+            mean_rel_rlu = mean(normed_results),
+            sd_rel_rlu = sd(normed_results),
+            fc = median(fc_ctrl100),
+            zfac100 = mean(summary_zfactor100)) %>%
+  mutate(zfac100 = case_when(ctrl == "100% control" ~ NA,
+                             TRUE ~ zfac100)) %>%
+  ungroup() %>%
+  arrange(fc)
+
 #calculate median r1881
 ctrl100_df <- screen %>%
   filter(ctrl == "100% control")
-med_ctrl100 <- median(ctrl100_df$fc_ctrl0, na.rm = TRUE)
+med_ctrl100 <- median(ctrl100_df$fc_ctrl100, na.rm = TRUE)
 #calculate median r1881 + 3sd
-sd_ctrl100 <- sd(ctrl100_df$fc_ctrl0, na.rm = TRUE)
+sd_ctrl100 <- sd(ctrl100_df$fc_ctrl100, na.rm = TRUE)
 med_3sd_ctrl100 <- med_ctrl100 + sd_ctrl100
 
-n_hits <- nrow(for_plot[for_plot$fc > med_3sd_ctrl100, ])
-hit_rate <- n_hits / nrow(for_plot) * 100
+n_hits <- nrow(meds[meds$fc > med_3sd_ctrl100, ])
+hit_rate <- n_hits / nrow(meds) * 100
 
-#get x hits to label on plot
-we_want_n_hits <- 13
-hit_cutoff <- for_plot %>% arrange(fc)
-labs_df <- hit_cutoff[(nrow(hit_cutoff) - we_want_n_hits + 1):nrow(hit_cutoff), ]
+#designate hits
+hit_designator <- meds %>%
+  filter(min_plate_zprime > 0 & min_fc > med_3sd_ctrl100)
+hit_designator <- hit_designator %>%
+  mutate(look = row_number(),
+         fc_hit = case_when(row_number() > nrow(hit_designator) - tier_1_n + 1 ~ "Tier 1",
+                            row_number() > nrow(hit_designator) - tier_2_n + 1 ~ "Tier 2",
+                            TRUE ~ NA),
+         fc_hit = factor(fc_hit, levels = c("Tier 1", "Tier 2", NA)))
+#merge hit designation back into meds (medians) dataframe
+meds2 <- merge(meds, hit_designator, on = short_mcule_lab, all.x = TRUE)
 
-fcplot <- ggplot(data = for_plot, aes(x = short_mcule_lab, y = fc)) +
-  geom_point(alpha = .4) +
+labs_df <- hit_designator %>% filter(fc_hit %in% c("Tier 1", "Tier 2"))
+
+segmenter <- unsum %>%
+  pivot_longer(cols = fc_ctrl100) %>%
+  select(short_mcule_lab, name, value) %>%
+  arrange(short_mcule_lab) %>%
+  group_by(short_mcule_lab) %>%
+  mutate(max_or_min = case_when(value == max(value) ~ "max",
+                                value == min(value) ~ "min",
+                                TRUE ~ NA)) %>%
+  filter(!(value < max(value) & value > min(value))) %>%
+  pivot_wider(id_cols = short_mcule_lab, names_from = max_or_min, values_from = value)
+
+# geom_segment(data = segmenter, aes(x = xval, y = Left, xend = xval, yend = Right)) +
+#   geom_point(size = 3, alpha = .2, data = vol, aes(x = xval, y = value)) 
+
+fcplot <- ggplot() +
+  geom_segment(data = segmenter, aes(x = short_mcule_lab, y = max, xend = short_mcule_lab, yend = min)) +
+  geom_point(data = unsum, aes(x = short_mcule_lab, y = fc_ctrl100), alpha = .3, size = 2) +
+  geom_point(data = meds2, aes(x = short_mcule_lab, y = fc, color = fc_hit), alpha = .5, size = 3) +
   theme_bw() +
   #label hits
-  geom_label(data = labs_df, aes(x = short_mcule_lab, y = fc, label = short_mcule_lab), size = 3, vjust = 1) +
+  # geom_label(data = labs_df, aes(x = short_mcule_lab, y = fc, label = short_mcule_lab), size = 3, vjust = 1) +
   geom_hline(
     yintercept = med_3sd_ctrl100,
-    color = "palevioletred",
+    color = "maroon",
     linewidth = 1.3,
     linetype = 4
   ) +
   #label cutoff line
   geom_label(
-    x = max(for_plot$short_mcule_lab),
+    x = max(unsum$short_mcule_lab),
     y = med_3sd_ctrl100,
     label = paste0(
       "Median+3SD 100% Control\n",
@@ -544,8 +587,10 @@ fcplot <- ggplot(data = for_plot, aes(x = short_mcule_lab, y = fc)) +
       round(hit_rate, 2),
       "% hit rate"
     ),
-    hjust = 1,
-    vjust = 1.2
+    hjust = -1
+    # ,
+    # hjust = 1,
+    # vjust = 1.2
   ) +
   theme(
     axis.text.x = element_blank(),
@@ -554,10 +599,27 @@ fcplot <- ggplot(data = for_plot, aes(x = short_mcule_lab, y = fc)) +
     panel.grid.minor = element_blank(),
     text = element_text(family = "serif")
   ) +
-  labs(title = "Fold Change Hits", subtitle = paste(we_want_n_hits, "labelled"), y = "Fold-Induction of Luciferase", x = "Compound by Number")
+  labs(title = "Fold Change Hits", subtitle = paste0("Tier 1 has an n of ", tier_1_n, ", Tier 2 has an n of ", (tier_2_n - tier_1_n)), y = "Fold-Reduction of Luciferase", x = "Compound by Number", color = "Hits") +
+  scale_color_manual(values = c("Tier 1" = "dodgerblue", "Tier 2" = "orange2", NA),
+                     na.value = "black")
+  # paletteer::scale_color_paletteer_d("wesanderson::GrandBudapest1")
 
 fcplot
+ggsave(paste0(here("graphs"), "/fold_change_hit_designator.png"), plot = fcplot)
 ```
+
+accompanying table
+
+```{r}
+tab1 <- meds2 %>%
+  select(coi, short_mcule_lab, ctrl, fc_hit, med_fc, fc, min_fc, min_plate_zprime, mean_rel_rlu, sd_rel_rlu) %>%
+  mutate(fc_cutoff = med_3sd_ctrl100) %>%
+  arrange(fc_hit, coi) %>%
+  filter(med_fc > fc_cutoff)
+kable(tab1)
+
+```
+
 
 ## Designated Hits
 
@@ -638,9 +700,7 @@ This was a viability assay, meaning that low RLU indicates cell death.
 
 Response is normalized to control using this formula:
 
-$$
-\frac{\text{signal} - mean(\text{0% control signal})}{mean(\text{100% control signal}) - mean(\text{0% control signal})}
-$$
+
 
 The following table includes all compounds that achieved 50% (absolute and relative) inhibition without extrapolating. Compounds with outlier RSE's are excluded.
 
@@ -690,9 +750,7 @@ This fluorescence polarization assay is used to investigate how well our hit com
 
 Response is normalized to control using this formula:
 
-$$
-\frac{\text{signal} - mean(\text{0% control signal})}{mean(\text{100% control signal}) - mean(\text{0% control signal})}
-$$
+
 
 The following table includes all compounds that achieved 50% relative binding without extrapolating (we have a reliable relative EC50).
 

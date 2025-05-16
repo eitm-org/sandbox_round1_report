@@ -1,0 +1,122 @@
+---
+title: "Sandbox Round 1 Initial Screen Report"
+author: "Abby Coleman"
+date: "`r Sys.Date()`"
+geometry: margin = 2cm
+output: 
+  pdf_document:
+    toc: TRUE
+    
+header-includes:
+  - \usepackage{titling}
+  - \pretitle{\begin{center}
+  - \includegraphics[width=1in,height=1in]{Ellison Medical Institute Logo_Bronze.png}\LARGE\\}
+  - \posttitle{\end{center}}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[C]{Sandbox Round 1}
+  - \fancyhead[L]{\includegraphics[width=0.5in]{Ellison Medical Institute Logo_Bronze.png}}
+  - \fancyfoot[L]{Ellison Medical Institute}
+  - \setlength{\headheight}{30.10677pt}
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir='..')
+#TODO: load these in a function
+source(here("R", "plot_plate_zfactors.R"))
+source(here("R", "plot_zfactor_outliers.R"))
+source(here("R", "plot_platemap.R"))
+source(here("R", "print_platemap.R"))
+source(here("R", "functions.R"))
+
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+
+#resolve conflicts
+conflicts_prefer(dplyr::filter(),
+                  stats::gaussian(),
+                  dplyr::select())
+```
+
+# Introduction
+
+```{r data_load, message = FALSE}
+ctrl0 <<- "DMSO"
+ctrl100 <<- "R1881"
+```
+
+The purpose of the initial screen was to designate "hit compounds," which would then move to the next phase of testing.
+
+This was a viability assay, meaning that low RLU indicates cell death.
+
+In this project, screens have technical replicates across plates.
+
+In the following plots, horizontal lines represent hit designation cutoffs at 3-9 standard deviations away from the mean of the 100% control. Lower lines serve as stricter cutoffs for designating hits.
+
+Z'Factor is calculated relative to 0% control condition.
+
+
+justify why you designated outliers like this
+
+# Overall
+
+
+
+```{r initial_screen_plots, results = "asis", warning = FALSE}
+screen <- data %>%
+  filter(assay_type == "Screen")
+# %>%
+#   filter(as.numeric(short_mcule_lab) < 75 & as.numeric(short_mcule_lab) > 60)
+#^ this allows you to see compound 272 more up close. that is the purple dot that appears to not be designated as a quantile outlier hit. but it actually is designated a quantile outlier hit, the median is just higher than the most visible purple point that you see.
+screenplot_all <- plot_screen(screen)
+print(screenplot_all$plot)
+#write table output to excel sheet
+summary_tab <- screenplot_all$table 
+write.xlsx(summary_tab, here("reports", "Hit Summary.xlsx"))
+```
+
+```{r summary_tab}
+#get counts
+#hits for both me and michael
+quant_and_manual <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter((scr_hit == "quantile outlier hit" & !is.na(tier)))
+#hits for me, not michael
+quant_only <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter(!is.na(scr_hit) & is.na(tier))
+#michael's hits that need to be rerun
+manual_reruns <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter(scr_hit == "rerun this compound" & is.na(tier))
+#michael's hits that aren't quantile outliers
+manual_only <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter(is.na(scr_hit) & !is.na(tier))
+```
+
+\newpage
+
+`r get_n_mcules(quant_and_manual)` compounds were designated hits by both the quantile outlier and manual methods.
+
+```{r}
+screenplot_quant_and_manual <- plot_screen(quant_and_manual, include_xaxis = TRUE)
+print(screenplot_quant_and_manual$plot)
+```
+
+```{r}
+kable(screenplot_quant_and_manual$table)
+```
+
+x compounds were designated hits by quantile outlier bound, but not michael
+
+x of michael's compounds need to be rerun
+
+x was designated a hit by michael but not quantile outlier bound
+
+quantile outlier bound method designated x hits michael designated y hits
+
+
+
