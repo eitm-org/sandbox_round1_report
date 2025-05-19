@@ -341,27 +341,20 @@ plot_screen <- function(df, include_xaxis = FALSE) {
 
   df <- df %>%
     #the control compounds get weird zfactors, so it's best to set those as NA so they're not included in the zfactor color scale
-    mutate(plotter_zfactor = case_when(ctrl == "control compound" ~ NA, TRUE ~ summary_zfactor)) %>%
+    # mutate(plotter_zfactor = case_when(ctrl == "control compound" ~ NA, TRUE ~ summary_zfactor)) %>%
     #we don't want to plot any blank wells
     filter(ctrl != "blank well")
 
-  #get color breaks for zfactor scale
-  color_break_range <- range(df$plotter_zfactor[df$plotter_zfactor > -Inf], na.rm = TRUE)
-  color_quantiles <- unname(quantile(color_break_range))
-  color_breaks <- sort(c(0, round(color_quantiles, 2)))
-  colors <- color_breaks %>%
-    as.data.frame() %>%
-    mutate(
-      color = case_when(
-        #TODO: don't hard code these numbers
-        color_breaks >= .3 ~ "#2D1160FF",
-        color_breaks < .3 &
-          color_breaks >= -1.5 ~ "#B63679FF",
-        TRUE ~ "#FEAF77FF"
-      )
-    ) %>%
-    select(color) %>%
-    as.list()
+  #get color breaks for compound %CV scale
+  # color_break_range <- range(df$exp_cv_result[df$exp_cv_result > -Inf], na.rm = TRUE)
+  # color_quantiles <- unname(quantile(color_break_range))
+  # color_breaks <- round(color_quantiles, 2)
+  # colors <- color_breaks %>%
+  #   as.data.frame()
+  # colors["color"] <- c("#2D1160FF", "#2D1160FF", "#B63679FF", "#FEAF77FF", "#FEAF77FF")
+  # colors <- colors %>%
+  #   select(color) %>%
+  #   as.list()
 
   #get 100% control quantile outlier bound
   ctrl100_bound <- max(df$hit_bound, na.rm = TRUE)
@@ -389,10 +382,29 @@ plot_screen <- function(df, include_xaxis = FALSE) {
   screenplot <- ggplot(data = df, aes(x = short_mcule_lab, y = normed_results)) +
     geom_boxplot(data = df, aes(x = short_mcule_lab, y = normed_results)) +
     geom_point(
+      data = plot_hits,
+      size = 4,
+      alpha = .3,
+      aes(x = short_mcule_lab, y = med_rel_rlu, color = scr_hit)
+    ) +
+    scale_color_viridis_d(begin = .65, direction = -1) +
+    # new_scale_color() +
+    geom_point(
       data = df,
-      aes(x = short_mcule_lab, y = normed_results, color = plotter_zfactor),
+      aes(x = short_mcule_lab, y = normed_results),
       alpha = .6
     ) +
+    # scale_color_viridis_c(option = "magma") +
+    # scale_color_gradientn(
+    #   colors = colors$color,
+    #   breaks = color_breaks,
+    #   limits = c(
+    #     #minimum compound cv in df
+    #     min(df$exp_cv_result[df$exp_cv_result > -Inf], na.rm = TRUE),
+    #     #maximum compound cv in df
+    #     max(df$exp_cv_result, na.rm = TRUE)
+    #   )
+    # ) +
     theme_bw() +
     labs(
       title = paste("Screening Experiments", paste(unique(df$experiment_id), collapse = ", ")),
@@ -400,22 +412,6 @@ plot_screen <- function(df, include_xaxis = FALSE) {
       y = "Percent Control RLU",
       color = "ZFactor"
     ) +
-    scale_color_gradientn(
-      colors = colors$color,
-      breaks = color_breaks,
-      limits = c(
-        min(df$plotter_zfactor[df$plotter_zfactor > -Inf], na.rm = TRUE),
-        max(df$plotter_zfactor, na.rm = TRUE)
-      )
-    ) +
-    new_scale_color() +
-    geom_point(
-      data = plot_hits,
-      size = 4,
-      alpha = .4,
-      aes(x = short_mcule_lab, y = med_rel_rlu, color = scr_hit)
-    ) +
-    scale_color_viridis_d(begin = .65) +
     geom_hline(
       yintercept = ctrl100_bound,
       color = "#FEAF77FF",
@@ -473,8 +469,8 @@ plot_screen <- function(df, include_xaxis = FALSE) {
       summary_tab <- meds %>%
         filter(
           scr_hit %in% c(
-            "quantile outlier hit",
-            "quantile outlier hit with min z'factor < 0"
+            "hit",
+            "hit, tier 2"
           ) |
             tier %in% c("Tier 1", "Tier 2")
         ) %>%

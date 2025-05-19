@@ -82,15 +82,11 @@ write.xlsx(summary_tab, here("reports", "Hit Summary.xlsx"))
 #hits for both me and michael
 quant_and_manual <- data %>%
   filter(assay_type == "Screen") %>%
-  filter((scr_hit == "quantile outlier hit" & !is.na(tier)))
+  filter((!is.na(scr_hit) & !is.na(tier)))
 #hits for me, not michael
 quant_only <- data %>%
   filter(assay_type == "Screen") %>%
   filter(!is.na(scr_hit) & is.na(tier))
-#michael's hits that need to be rerun
-manual_reruns <- data %>%
-  filter(assay_type == "Screen") %>%
-  filter(scr_hit == "rerun this compound" & is.na(tier))
 #michael's hits that aren't quantile outliers
 manual_only <- data %>%
   filter(assay_type == "Screen") %>%
@@ -119,4 +115,39 @@ x was designated a hit by michael but not quantile outlier bound
 quantile outlier bound method designated x hits michael designated y hits
 
 
+```{r cvs, out.width = "70%"}
+for_plot <- data %>%
+  select(experiment_id,
+         experiment_type,
+         assay_type,
+         start_date,
+         summary_cv,
+         compound_cv_cutoff,
+         coi,
+         short_mcule_lab,
+         exp_cv_result) %>%
+  arrange(assay_type, experiment_id) %>%
+  distinct()
 
+cvplot <- ggplot(data = for_plot, aes(x = assay_type, y = exp_cv_result)) +
+  geom_boxplot(outliers = FALSE) +
+  geom_quasirandom(size = 3,
+                   alpha = .2,
+                   aes(color = short_mcule_lab)) +
+  scale_color_viridis_d(end = .9, guide = "none") +
+  geom_line(aes(x = assay_type, y = compound_cv_cutoff)) +
+  theme_bw() +
+  labs(
+    x = "Assay Type",
+    y = "Summary %CV",
+    title = "%CV"
+  ) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    text = element_text(family = "serif")
+  )
+
+cvplot 
+```

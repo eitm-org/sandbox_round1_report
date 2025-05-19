@@ -1,13 +1,18 @@
 TODO:
 
-* QC-- process control chart
+* code-- separate data cleaning scripts
+
+TRUNCATED SCREENING REPORT
+* clean up boxplots (replace with lines)
+* michael's hits that I missed
+* remove intro
+* interpretation
+* check excel output
+* add hit rate to plot
+
+DOSSIER
+* QC nice to have-- process control chart
 * QC nice to have-- process control chart + white noise modelling
-* initial screen-- hit designation fold change plot
-* initial screen-- hit table
-* initial screen-- interpretations and overall summary
-* overall summary
-* code-- put data cleaning in a separate script in the munge directory
 * code-- functionalize
 * code-- add tests
 * code-- replace for loops with lapplys
-* code-- use ProjectTemplate

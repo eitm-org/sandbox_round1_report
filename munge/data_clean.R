@@ -194,14 +194,14 @@ alldf <- bind_rows(screen, drc, binding, meta) %>%
     )
   ) %>%
   #next, calculate mean and sd result for each replicate group
-  group_by(experiment_id, data.plate_id, coi, coi_dose, ctrl) %>%
+  group_by(experiment_id, data.plate_id, coi, coi_dose) %>%
   mutate(
     plate_mean_res = mean(data.result, na.rm = TRUE),
     plate_sd_res = sd(data.result, na.rm = TRUE),
     plate_cv_result = (plate_sd_res / plate_mean_res) * 100
   ) %>%
   ungroup() %>%
-  group_by(experiment_id, coi, coi_dose, ctrl) %>%
+  group_by(experiment_id, coi, coi_dose) %>%
   mutate(
     exp_mean_res = mean(data.result, na.rm = TRUE),
     exp_sd_res = sd(data.result, na.rm = TRUE),
@@ -284,11 +284,22 @@ alldf <- alldf %>%
       levels = c("Screen", "Dose Response Curve", "Polar Binding")
     )
   ) %>%
-  #calculate cv cutoffs
-  group_by(experiment_id, summary_cv, assay_type) %>%
+  #calculate cv cutoffs for experiment/plate (which i call "summary cv")
+  #TODO: add cell line
+  group_by(summary_cv, assay_type) %>%
+  #nest here because we only want one value for the summary cvs
   nest() %>%
+  #TODO: include cell_line in this grouping when kenneth includes it
   group_by(assay_type) %>%
-  mutate(cv_cutoff = quantile(summary_cv, prob = .75) + 1.5 * IQR(summary_cv)) %>%
+  mutate(summary_cv_cutoff = quantile(summary_cv, prob = .75) + 1.5 * IQR(summary_cv)) %>%
+  unnest(cols = c(data)) %>%
+  ungroup() %>%
+  #now we want cv cutoffs for the compounds (not just experiment/plate)
+  #TODO: add cell line
+  group_by(exp_cv_result, assay_type, ctrl) %>%
+  nest() %>%
+  group_by(assay_type, ctrl) %>%
+  mutate(compound_cv_cutoff = quantile(exp_cv_result, prob = .75) + 1.5 * IQR(exp_cv_result)) %>%
   unnest(cols = c(data)) %>%
   ungroup() %>%
   #designate hits with quantile outlier bound
@@ -302,8 +313,8 @@ alldf <- alldf %>%
       assay_type != "Screen" ~ NA,
       ctrl != "sample" ~ NA,
       med_rel_rlu < ctrl100_pc_quant_outlier_bound &
-        min_plate_zprime > 0 ~ "quantile outlier hit",
-      med_rel_rlu < ctrl100_pc_quant_outlier_bound ~ "quantile outlier hit,\nmin z'factor < 0",
+        exp_cv_result > compound_cv_cutoff ~ "quantile outlier hit,\noutlier %CV",
+      med_rel_rlu < ctrl100_pc_quant_outlier_bound ~ "quantile outlier hit",
       TRUE ~ NA
     )
   ) %>%
@@ -380,7 +391,8 @@ alldf <- alldf %>%
     plate_zprime,
     exp_zprime,
     summary_zprime,
-    cv_cutoff,
+    summary_cv_cutoff,
+    compound_cv_cutoff,
     coi,
     short_mcule_lab,
     ctrl,

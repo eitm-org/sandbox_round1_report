@@ -60,4 +60,5 @@ data/*
 *graphs/
 *.tex
 *.log
+*.xlsx
 
