@@ -329,7 +329,7 @@ add_ctrls_to_df <- function(df, ctrl_input) {
   return(df)
 }
 
-plot_screen <- function(df, include_xaxis = FALSE) {
+plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
   #include 0 and 100% controls for the plates in df
   #(if they're not already in there)
   if (!("100% control" %in% unique(df$ctrl))) {
@@ -343,7 +343,8 @@ plot_screen <- function(df, include_xaxis = FALSE) {
     #the control compounds get weird zfactors, so it's best to set those as NA so they're not included in the zfactor color scale
     # mutate(plotter_zfactor = case_when(ctrl == "control compound" ~ NA, TRUE ~ summary_zfactor)) %>%
     #we don't want to plot any blank wells
-    filter(ctrl != "blank well")
+    filter(ctrl != "blank well") %>%
+    filter(is.na(qc_flag))
 
   #get color breaks for compound %CV scale
   # color_break_range <- range(df$exp_cv_result[df$exp_cv_result > -Inf], na.rm = TRUE)
@@ -363,7 +364,7 @@ plot_screen <- function(df, include_xaxis = FALSE) {
   #get a dataframe of medians per coi
   #(this will be used to designate hits)
   meds <- df %>%
-    filter(ctrl == "sample") %>%
+    # filter(ctrl == "sample") %>%
     select(
       coi,
       short_mcule_lab,
@@ -371,6 +372,7 @@ plot_screen <- function(df, include_xaxis = FALSE) {
       scr_hit,
       tier,
       min_plate_zprime,
+      min_rel_rlu,
       max_rel_rlu,
       med_rel_rlu
     ) %>%
@@ -379,35 +381,34 @@ plot_screen <- function(df, include_xaxis = FALSE) {
   plot_hits <- meds %>%
     filter(!is.na(scr_hit))
 
+  #get hit rate to add to plot as geom_label
+  n_hits <- nrow(plot_hits)
+  hit_rate <- n_hits/nrow(meds)*100
+
+  #get x value to label outlier bound line
+  label_x_plotter <- quantile(as.numeric(unique(df$short_mcule_lab)), probs = .97)[[1]]
+
   screenplot <- ggplot(data = df, aes(x = short_mcule_lab, y = normed_results)) +
-    geom_boxplot(data = df, aes(x = short_mcule_lab, y = normed_results)) +
+    #plot rangelines
+    geom_segment(data = meds, color = "darkgray", aes(x = short_mcule_lab, y = min_rel_rlu, xend = short_mcule_lab, yend = max_rel_rlu)) +
+    #add points to designate hits
     geom_point(
       data = plot_hits,
       size = 4,
-      alpha = .3,
+      alpha = .6,
       aes(x = short_mcule_lab, y = med_rel_rlu, color = scr_hit)
     ) +
     scale_color_viridis_d(begin = .65, direction = -1) +
-    # new_scale_color() +
+    #plot medians
     geom_point(
-      data = df,
-      aes(x = short_mcule_lab, y = normed_results),
+      data = meds,
+      aes(x = short_mcule_lab, y = med_rel_rlu),
       alpha = .6
     ) +
-    # scale_color_viridis_c(option = "magma") +
-    # scale_color_gradientn(
-    #   colors = colors$color,
-    #   breaks = color_breaks,
-    #   limits = c(
-    #     #minimum compound cv in df
-    #     min(df$exp_cv_result[df$exp_cv_result > -Inf], na.rm = TRUE),
-    #     #maximum compound cv in df
-    #     max(df$exp_cv_result, na.rm = TRUE)
-    #   )
-    # ) +
     theme_bw() +
     labs(
-      title = paste("Screening Experiments", paste(unique(df$experiment_id), collapse = ", ")),
+      title = input_title,
+      subtitle = paste("Screening Experiments", paste(unique(df$experiment_id), collapse = ", ")),
       x = "Compound",
       y = "Percent Control RLU",
       color = "ZFactor"
@@ -426,24 +427,22 @@ plot_screen <- function(df, include_xaxis = FALSE) {
       legend.text = element_text(size = 7),
       plot.margin = unit(c(.1, .1, .1, .1), "cm"),
       axis.text = element_text(size = 8),
-      text = element_text(family = "serif")
+      text = element_text(family = "serif"),
+      axis.text.x = element_text(size = 6.5, angle = 90, vjust = 0.5, hjust=1)
     ) +
     ylim(c(0, max(df$normed_results, na.rm = TRUE))) +
     #label cutoff line
     geom_label(
-      x = as.numeric(max(unique(
-        df$short_mcule_lab
-      ), na.rm = TRUE)),
+      x = label_x_plotter,
       y = ctrl100_bound,
-      # hjust = 1.2,
-      # vjust = -.6,
-      label = paste0("100% Control Quantile Outlier Bound")
-                     #TODO: add this back
-                     # ,
-                     # n_hits,
-                     # " FC hits ~ ",
-                     # round(hit_rate, 2),
-                     # "% hit rate")))))
+      hjust = 1,
+      vjust = -.2,
+      size = 3,
+      label = paste0("100% Control Quantile Outlier Bound\n",
+                     n_hits,
+                     " hits ~ ",
+                     round(hit_rate, 2),
+                     "% hit rate")
       )
       #remove xaxis ticks and labels if include_xaxis = FALSE
       if (include_xaxis == FALSE) {
@@ -468,11 +467,9 @@ plot_screen <- function(df, include_xaxis = FALSE) {
       #make summary table
       summary_tab <- meds %>%
         filter(
-          scr_hit %in% c(
-            "hit",
-            "hit, tier 2"
-          ) |
-            tier %in% c("Tier 1", "Tier 2")
+          #include only hits that were designated by quantile outlier or michael's methods
+          !is.na(scr_hit) |
+            !is.na(tier)
         ) %>%
         select(coi, med_rel_rlu, scr_hit, tier) %>%
         distinct() %>%

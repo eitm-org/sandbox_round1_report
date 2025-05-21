@@ -182,6 +182,7 @@ alldf <- bind_rows(screen, drc, binding, meta) %>%
   ungroup() %>%
   #plate 1498, 1499, 1500. rows f and g were mislabelled "r1881" when they should be blank wells
   mutate(
+    #TODO: this will need to be updated when you add new data
     coi = case_when(
       data.plate_id %in% c(1498, 1499, 1500) &
         grepl("F|G", data.well_id) ~ "blank well",
@@ -193,37 +194,59 @@ alldf <- bind_rows(screen, drc, binding, meta) %>%
       TRUE ~ ctrl
     )
   ) %>%
+  #CALCULATE Z'FACTOR.
+  group_by(data.plate_id) %>%
+  mutate(plate_mean_ctrl100 = mean(data.result[ctrl == "100% control"], na.rm = TRUE),
+         plate_sd_ctrl100 = sd(data.result[ctrl == "100% control"], na.rm = TRUE),
+         plate_mean_ctrl0 = mean(data.result[ctrl == "0% control"], na.rm = TRUE),
+         plate_sd_ctrl0 = sd(data.result[ctrl == "0% control"], na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    plate_zprime = 1 - (
+      3 * (plate_sd_ctrl100 + plate_sd_ctrl0) / abs(plate_mean_ctrl100 - plate_mean_ctrl0)
+    ),
+    # IF THERE ARE SCREENING EXPERIMENTS WITH > 1 PLATE WITH <0 Z'FACTOR, TELL LAB TO RERUN..
+    # for screening experiments with 1 plate with z'factor <0, exclude it from analysis
+    qc_flag = case_when(plate_zprime < 0 ~ "plate z'factor < 0",
+                        TRUE ~ NA)) %>%
   #next, calculate mean and sd result for each replicate group
   group_by(experiment_id, data.plate_id, coi, coi_dose) %>%
+  #we don't need to exclude plates with z'factor < 0 here
+    #because these are by-plate calculations
   mutate(
     plate_mean_res = mean(data.result, na.rm = TRUE),
-    plate_sd_res = sd(data.result, na.rm = TRUE),
+    plate_sd_res = sd(data.result, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    plate_zfactor = 1 - (
+      3 * (plate_sd_res + plate_sd_ctrl0) / abs(plate_mean_res - plate_mean_ctrl0)),
     plate_cv_result = (plate_sd_res / plate_mean_res) * 100
   ) %>%
   ungroup() %>%
-  group_by(experiment_id, coi, coi_dose) %>%
+  #now we need to exclude plates with z'factor <0
+    #because we're doing by-experiment calculations
+  #so we will include qc_flag in our group_by
+  group_by(experiment_id, coi, coi_dose, qc_flag) %>%
   mutate(
     exp_mean_res = mean(data.result, na.rm = TRUE),
     exp_sd_res = sd(data.result, na.rm = TRUE),
     exp_cv_result = (exp_sd_res / exp_mean_res) * 100
   ) %>%
   ungroup() %>%
-  #use those to calculate plate %CV and zfactor
+  #use plate stats to calculate plate %CV and zfactor
   group_by(data.plate_id) %>%
+    #(again, don't need to include qc_flag here because these are by-plate calculations)
   mutate(
     plate_cv = mean(plate_cv_result, na.rm = TRUE),
-    plate_mean_ctrl100 = mean(data.result[ctrl == "100% control"], na.rm = TRUE),
-    plate_sd_ctrl100 = sd(data.result[ctrl == "100% control"], na.rm = TRUE),
-    plate_mean_ctrl0 = mean(data.result[ctrl == "0% control"], na.rm = TRUE),
-    plate_sd_ctrl0 = sd(data.result[ctrl == "0% control"], na.rm = TRUE),
     normed_results = (data.result - plate_mean_ctrl0) / (plate_mean_ctrl100 - plate_mean_ctrl0) *
       100
   ) %>%
   ungroup()
 
-#calculate quantile outlier bound to designate hits for screen
+#calculate quantile outlier bound to designate hit tiers for screen
 screen2 <- alldf %>%
-  filter(assay_type == "Screen" & ctrl == "100% control")
+  filter(assay_type == "Screen" & ctrl == "100% control" & is.na(qc_flag))
+  #^ don't include plates with z'factor < 0 in this calculation
 iqr_ctrl100_pc <- IQR(screen2$normed_results, na.rm = TRUE)
 q25_ctrl100_pc <- quantile(screen2$normed_results, probs = .25)[[1]]
 ctrl100_pc_quant_outlier_bound <- q25_ctrl100_pc - 1.5 * iqr_ctrl100_pc
@@ -231,7 +254,9 @@ ctrl100_pc_quant_outlier_bound <- q25_ctrl100_pc - 1.5 * iqr_ctrl100_pc
 alldf <- alldf %>%
   mutate(hit_bound = case_when(assay_type == "Screen" ~ ctrl100_pc_quant_outlier_bound,
                                TRUE ~ NA)) %>%
-  group_by(experiment_id) %>%
+  #calculate experiment cv
+  #include qc_flag in your group_by to exclude plates with z'factor < 0
+  group_by(experiment_id, qc_flag) %>%
   mutate(
     exp_cv = mean(exp_cv_result, na.rm = TRUE),
     exp_mean_ctrl100 = mean(data.result[ctrl == "100% control"], na.rm = TRUE),
@@ -241,20 +266,8 @@ alldf <- alldf %>%
   ) %>%
   ungroup() %>%
   mutate(
-    plate_zfactor = 1 - (
-      3 * (plate_sd_res + plate_sd_ctrl0) / abs(plate_mean_res - plate_mean_ctrl0)
-    ),
-    plate_zfactor100 = 1 - (
-      3 * (plate_sd_res + plate_sd_ctrl100) / abs(plate_mean_res - plate_mean_ctrl100)
-    ),
-    plate_zprime = 1 - (
-      3 * (plate_sd_ctrl100 + plate_sd_ctrl0) / abs(plate_mean_ctrl100 - plate_mean_ctrl0)
-    ),
     exp_zfactor = 1 - (
       3 * (exp_sd_res + exp_sd_ctrl0) / abs(exp_mean_res - exp_mean_ctrl0)
-    ),
-    exp_zfactor100 = 1 - (
-      3 * (exp_sd_res + exp_sd_ctrl100) / abs(exp_mean_res - exp_mean_ctrl100)
     ),
     exp_zprime = 1 - (
       3 * (exp_sd_ctrl100 + exp_sd_ctrl0) / abs(exp_mean_ctrl100 - exp_mean_ctrl0)
@@ -263,11 +276,6 @@ alldf <- alldf %>%
       assay_type == "Screen" ~ exp_zfactor,
       assay_type == "Dose Response Curve" |
         assay_type == "Polar Binding" ~ plate_zfactor
-    ),
-    summary_zfactor100 = case_when(
-      assay_type == "Screen" ~ exp_zfactor100,
-      assay_type == "Dose Response Curve" |
-        assay_type == "Polar Binding" ~ plate_zfactor100
     ),
     summary_zprime = case_when(
       assay_type == "Screen" ~ exp_zprime,
@@ -286,80 +294,46 @@ alldf <- alldf %>%
   ) %>%
   #calculate cv cutoffs for experiment/plate (which i call "summary cv")
   #TODO: add cell line
-  group_by(summary_cv, assay_type) %>%
-  #nest here because we only want one value for the summary cvs
+  group_by(summary_cv, assay_type, qc_flag) %>%
+  #nest here because we only want one value for each summary cv in our calculation
   nest() %>%
   #TODO: include cell_line in this grouping when kenneth includes it
-  group_by(assay_type) %>%
+  #exclude plates with z'factor < 0 from our calculations
+  group_by(assay_type, qc_flag) %>%
   mutate(summary_cv_cutoff = quantile(summary_cv, prob = .75) + 1.5 * IQR(summary_cv)) %>%
   unnest(cols = c(data)) %>%
   ungroup() %>%
   #now we want cv cutoffs for the compounds (not just experiment/plate)
   #TODO: add cell line
-  group_by(exp_cv_result, assay_type, ctrl) %>%
+  #exclude plates with z'factor < 0
+  group_by(exp_cv_result, assay_type, qc_flag) %>%
   nest() %>%
-  group_by(assay_type, ctrl) %>%
-  mutate(compound_cv_cutoff = quantile(exp_cv_result, prob = .75) + 1.5 * IQR(exp_cv_result)) %>%
+  group_by(assay_type, qc_flag) %>%
+  mutate(compound_cv_cutoff = quantile(exp_cv_result, prob = .75, na.rm = TRUE) + 1.5 * IQR(exp_cv_result, na.rm = TRUE)) %>%
   unnest(cols = c(data)) %>%
   ungroup() %>%
   #designate hits with quantile outlier bound
   #TODO: when kenneth includes cell_line, you'll also need to group by that
-  group_by(coi, ctrl, assay_type, experiment_type) %>%
+  #exclude plates with z'factor < 0
+  group_by(coi, ctrl, assay_type, experiment_type, qc_flag) %>%
   mutate(
     min_plate_zprime = min(plate_zprime, na.rm = TRUE),
+    min_rel_rlu = min(normed_results, na.rm = TRUE),
     max_rel_rlu = max(normed_results, na.rm = TRUE),
     med_rel_rlu = median(normed_results, na.rm = TRUE),
     scr_hit = case_when(
       assay_type != "Screen" ~ NA,
       ctrl != "sample" ~ NA,
-      med_rel_rlu < ctrl100_pc_quant_outlier_bound &
-        exp_cv_result > compound_cv_cutoff ~ "quantile outlier hit,\noutlier %CV",
-      med_rel_rlu < ctrl100_pc_quant_outlier_bound ~ "quantile outlier hit",
+      max_rel_rlu < ctrl100_pc_quant_outlier_bound &
+        exp_cv_result > compound_cv_cutoff ~ "hit, tier 2",
+      max_rel_rlu < ctrl100_pc_quant_outlier_bound ~ "hit",
       TRUE ~ NA
     )
   ) %>%
   ungroup() %>%
-  #calculate fold change from 100% control
-  # mutate(fc_ctrl100 = data.result / plate_mean_ctrl100) %>%
-  # mutate(
-  #   scr_hit = case_when(
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 9 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "9SD hit",
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 8 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "8SD hit",
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 7 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "7SD hit",
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 6 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "6SD hit",
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 5 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "5SD hit",
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 4 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "4SD hit",
-  #     assay_type == "Screen" &
-  #       exp_mean_pc < (exp_mean_ctrl100_pc - 3 * exp_sd_ctrl100_pc) &
-  #       ctrl == "sample" ~ "3SD hit",
-  #     assay_type == "Screen" ~ "not a hit",
-  #     assay_type != "Screen" ~ "not a screen"
-  #   ),
-  #calculate separation from 100% control
-  mutate(
-    sep_ctrl100 = case_when(
-      assay_type == "Screen" ~ 1 - (
-        3 * (exp_sd_ctrl100 + exp_sd_res) / (exp_mean_ctrl100 - exp_mean_res)
-      ),
-      assay_type %in% c("Dose Response Curve", "Polar Binding") ~ 1 - (
-        3 * (plate_sd_ctrl100 + plate_sd_res) / (plate_mean_ctrl100 - plate_mean_res)
-      )
-    ),
     #add short_mcule_lab column
     #this column is useful for plotting
-    short_mcule_lab = case_when(ctrl == "sample" ~ str_extract(coi, "[:digit:]{3}$"), TRUE ~ coi)
+  mutate(short_mcule_lab = case_when(ctrl == "sample" ~ str_extract(coi, "[:digit:]{3}$"), TRUE ~ coi)
   ) %>%
   #see if it models with drc
   #group by coi and plate
@@ -403,22 +377,23 @@ alldf <- alldf %>%
     does_it_drc = map_lgl(data, does_it_model),
     n_dose_per_cmpnd_plate = map_dbl(data, function(data)
       length(unique(data$coi_dose)))
-  )
+  ) %>%
+  ungroup()
 
 #make short_mcule_lab column a factor (this column is defined in row 325)
 # get a list to tell the order that the factor short_mcule_lab should be
-mcule_names <- data %>%
+mcule_names <- alldf %>%
   filter(grepl("MCULE", coi)) %>%
   sort_compound_names()
 #controls
-ctrl0_names <- data %>%
+ctrl0_names <- alldf %>%
   filter(ctrl == "0% control") %>%
   sort_compound_names()
-ctrl100_names <- data %>%
+ctrl100_names <- alldf %>%
   filter(ctrl == "100% control") %>%
   sort_compound_names()
 # other compounds
-others <- data %>%
+others <- alldf %>%
   filter(ctrl != "100% control" &
            ctrl != "0% control" & !grepl("MCULE", coi)) %>%
   sort_compound_names()

@@ -40,37 +40,22 @@ conflicts_prefer(dplyr::filter(),
                   dplyr::select())
 ```
 
-# Introduction
 
 ```{r data_load, message = FALSE}
 ctrl0 <<- "DMSO"
 ctrl100 <<- "R1881"
 ```
 
-The purpose of the initial screen was to designate "hit compounds," which would then move to the next phase of testing.
-
-This was a viability assay, meaning that low RLU indicates cell death.
-
-In this project, screens have technical replicates across plates.
-
-In the following plots, horizontal lines represent hit designation cutoffs at 3-9 standard deviations away from the mean of the 100% control. Lower lines serve as stricter cutoffs for designating hits.
-
-Z'Factor is calculated relative to 0% control condition.
-
-
-justify why you designated outliers like this
 
 # Overall
 
-
-
 ```{r initial_screen_plots, results = "asis", warning = FALSE}
 screen <- data %>%
-  filter(assay_type == "Screen")
+  filter(assay_type == "Screen" & is.na(qc_flag))
 # %>%
 #   filter(as.numeric(short_mcule_lab) < 75 & as.numeric(short_mcule_lab) > 60)
 #^ this allows you to see compound 272 more up close. that is the purple dot that appears to not be designated as a quantile outlier hit. but it actually is designated a quantile outlier hit, the median is just higher than the most visible purple point that you see.
-screenplot_all <- plot_screen(screen)
+screenplot_all <- plot_screen(screen,  input_title = "All Screening Experiments")
 print(screenplot_all$plot)
 #write table output to excel sheet
 summary_tab <- screenplot_all$table 
@@ -80,42 +65,31 @@ write.xlsx(summary_tab, here("reports", "Hit Summary.xlsx"))
 ```{r summary_tab}
 #get counts
 #hits for both me and michael
-quant_and_manual <- data %>%
-  filter(assay_type == "Screen") %>%
-  filter((!is.na(scr_hit) & !is.na(tier)))
-#hits for me, not michael
-quant_only <- data %>%
-  filter(assay_type == "Screen") %>%
-  filter(!is.na(scr_hit) & is.na(tier))
+quant <- data %>%
+  filter(assay_type == "Screen" & is.na(qc_flag)) %>%
+  filter(!is.na(scr_hit) | !is.na(tier)) 
 #michael's hits that aren't quantile outliers
-manual_only <- data %>%
-  filter(assay_type == "Screen") %>%
-  filter(is.na(scr_hit) & !is.na(tier))
+# manual_only <- data %>%
+#   filter(assay_type == "Screen") %>%
+#   filter(is.na(scr_hit) & !is.na(tier))
 ```
 
 \newpage
 
-`r get_n_mcules(quant_and_manual)` compounds were designated hits by both the quantile outlier and manual methods.
+`r get_n_mcules(quant)` compounds were designated hits by the quantile outlier method.
 
 ```{r}
-screenplot_quant_and_manual <- plot_screen(quant_and_manual, include_xaxis = TRUE)
-print(screenplot_quant_and_manual$plot)
+screenplot_quant <- plot_screen(quant, "Hits Only", include_xaxis = TRUE)
+print(screenplot_quant$plot)
 ```
 
 ```{r}
-kable(screenplot_quant_and_manual$table)
+kable(screenplot_quant$table, digits = 2)
 ```
 
-x compounds were designated hits by quantile outlier bound, but not michael
+# Compound %CV's
 
-x of michael's compounds need to be rerun
-
-x was designated a hit by michael but not quantile outlier bound
-
-quantile outlier bound method designated x hits michael designated y hits
-
-
-```{r cvs, out.width = "70%"}
+```{r cvs, out.width = "70%", warning = FALSE}
 for_plot <- data %>%
   select(experiment_id,
          experiment_type,
@@ -125,9 +99,11 @@ for_plot <- data %>%
          compound_cv_cutoff,
          coi,
          short_mcule_lab,
-         exp_cv_result) %>%
+         exp_cv_result,
+         qc_flag) %>%
   arrange(assay_type, experiment_id) %>%
-  distinct()
+  distinct() %>%
+  filter(is.na(qc_flag))
 
 cvplot <- ggplot(data = for_plot, aes(x = assay_type, y = exp_cv_result)) +
   geom_boxplot(outliers = FALSE) +
@@ -140,7 +116,7 @@ cvplot <- ggplot(data = for_plot, aes(x = assay_type, y = exp_cv_result)) +
   labs(
     x = "Assay Type",
     y = "Summary %CV",
-    title = "%CV"
+    title = "All %CV's, Calculated by Compound"
   ) +
   theme(
     panel.grid.major = element_blank(),
@@ -148,6 +124,59 @@ cvplot <- ggplot(data = for_plot, aes(x = assay_type, y = exp_cv_result)) +
     panel.background = element_blank(),
     text = element_text(family = "serif")
   )
-
 cvplot 
 ```
+
+See Compound %CV Outliers.
+
+```{r see_cv_outliers}
+#screen data
+cv_outliers <- data %>%
+  filter(assay_type == "Screen" & is.na(qc_flag)) %>%
+  filter(ctrl == "sample") %>%
+  filter(exp_cv_result > compound_cv_cutoff) 
+#color-blind safecolor scale (discrete)
+# okabe <- c("black", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+cv_outliers_raw_plot <- ggplot(data = cv_outliers, aes(x = short_mcule_lab, y = data.result, color = data.plate_id)) +
+  geom_point(alpha = .4, size = 3) +
+  theme_bw() +
+  # scale_color_viridis_d() +
+  labs(title = "Raw Signal for Compounds with Outlier %CV's",
+       x = "MCULE",
+       y = "Raw RLU",
+       color = "Plate ID") +
+  scale_color_paletteer_d("colorBlindness::paletteMartin")
+  # scale_color_manual(values = okabe) 
+cv_outliers_raw_plot
+
+see_tab <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter(ctrl == "sample") %>%
+  filter(exp_cv_result > compound_cv_cutoff)  %>%
+  select(short_mcule_lab, exp_cv_result, exp_mean_res, exp_sd_res) %>%
+  distinct() %>%
+  arrange(short_mcule_lab)
+#TODO: change color scale
+
+```
+
+\newpage
+
+# Excluded Plates
+
+These plates were excluded for having Z'factor < 0.
+
+```{r z_prime_lt_0}
+excluded <- data %>%
+  filter(assay_type == "Screen" & qc_flag == "plate z'factor < 0")
+excluded_tab <- excluded %>%
+  select(experiment_id, data.plate_id, plate_zprime) %>%
+  distinct()
+names(excluded_tab) <- c("Experiment ID", "Plate ID", "Plate Z'Factor")
+kable(excluded_tab, digits = 2)
+```
+
+```{r plot_z_prime_outliers}
+print(plot_zfactor_outliers(excluded))
+```
+
