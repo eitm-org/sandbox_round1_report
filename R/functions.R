@@ -344,7 +344,12 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
     # mutate(plotter_zfactor = case_when(ctrl == "control compound" ~ NA, TRUE ~ summary_zfactor)) %>%
     #we don't want to plot any blank wells
     filter(ctrl != "blank well") %>%
-    filter(is.na(qc_flag))
+    #add a value for compounds that were not flagged for qc
+    mutate(qc_flag = case_when(is.na(qc_flag) ~ "passed qc",
+                               TRUE ~ qc_flag),
+           qc_flag = factor(qc_flag, levels = c("passed qc", "plate z'factor < 0", "2 low z'factors in experiment")))
+  # %>%
+  #   filter(is.na(qc_flag))
 
   #get color breaks for compound %CV scale
   # color_break_range <- range(df$exp_cv_result[df$exp_cv_result > -Inf], na.rm = TRUE)
@@ -367,6 +372,7 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
     # filter(ctrl == "sample") %>%
     select(
       coi,
+      experiment_id,
       short_mcule_lab,
       ctrl,
       scr_hit,
@@ -374,7 +380,10 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
       min_plate_zprime,
       min_rel_rlu,
       max_rel_rlu,
-      med_rel_rlu
+      med_rel_rlu,
+      exp_cv_result,
+      compound_cv_cutoff,
+      qc_flag
     ) %>%
     distinct()
 
@@ -382,9 +391,10 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
     filter(!is.na(scr_hit))
 
   #get hit rate to add to plot as geom_label
-  n_hits <- nrow(plot_hits)
-  hit_rate <- n_hits/nrow(meds)*100
+  n_hits <- length(unique(plot_hits$short_mcule_lab))
+  hit_rate <- n_hits/length(unique(meds$short_mcule_lab))*100
 
+  #get mins and max's per
   #get x value to label outlier bound line
   label_x_plotter <- quantile(as.numeric(unique(df$short_mcule_lab)), probs = .97)[[1]]
 
@@ -402,7 +412,7 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
     #plot medians
     geom_point(
       data = meds,
-      aes(x = short_mcule_lab, y = med_rel_rlu),
+      aes(x = short_mcule_lab, y = med_rel_rlu, shape = qc_flag),
       alpha = .6
     ) +
     theme_bw() +
@@ -411,14 +421,14 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
       subtitle = paste("Screening Experiments", paste(unique(df$experiment_id), collapse = ", ")),
       x = "Compound",
       y = "Percent Control RLU",
-      color = "ZFactor"
+      color = "Hit",
+      shape = "QC"
     ) +
     geom_hline(
       yintercept = ctrl100_bound,
       color = "#FEAF77FF",
       linewidth = 1.5
     ) +
-    labs(color = "Hit") +
     theme(
       panel.grid.major = element_blank(),
       panel.grid.minor = element_blank(),
@@ -471,13 +481,18 @@ plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
           !is.na(scr_hit) |
             !is.na(tier)
         ) %>%
-        select(coi, med_rel_rlu, scr_hit, tier) %>%
+        select(coi, experiment_id, med_rel_rlu, max_rel_rlu, scr_hit, tier, exp_cv_result, qc_flag, min_plate_zprime) %>%
         distinct() %>%
         arrange(scr_hit, tier, med_rel_rlu)
       col_names <- c("Compound",
+                     "Experiment",
                      "Median % Control RLU",
+                     "Maximum % Control RLU",
                      "Quantile Outlier Hit",
-                     "Michael's Hits")
+                     "Michael's Hits",
+                     "Compound %CV",
+                     "QC Flag",
+                     "Minimum Plate Z'Factor")
       names(summary_tab) <- col_names
 
       return_list <- list("table" = summary_tab, "plot" = screenplot)
