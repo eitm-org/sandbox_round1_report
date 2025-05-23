@@ -26,7 +26,8 @@ plot_zfactor_outliers <- function(df) {
     ) %>%
     #start plotting!
     ggplot(aes(x = nice_ctrl, y = data.result)) +
-    facet_wrap( ~ nice_label, scales = "free") +
+    facet_grid(cols = vars(nice_label), scales = "fixed", margins = FALSE) +
+    # facet_wrap( ~ nice_label, scales = "free") +
     geom_boxplot(outliers = FALSE) +
     geom_quasirandom(size = 3, alpha = .5, aes(color = coi)) +
     scale_color_viridis_d(guide = "none", end = .8) +
@@ -35,7 +36,7 @@ plot_zfactor_outliers <- function(df) {
       title = "Raw Signal for Z'Factor Outliers",
       y = "Raw RLU",
       x = "Control",
-      caption = "note differences in scale\nPoints colored by compound.",
+      caption = "Points colored by compound.",
       color = "Z Factor"
     ) +
     theme(text = element_text(family = "serif"))

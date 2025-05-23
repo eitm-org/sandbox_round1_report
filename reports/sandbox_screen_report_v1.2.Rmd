@@ -1,5 +1,5 @@
 ---
-title: "Sandbox Round 1 Initial Screen Report"
+title: "AR-Dimer Round 1 Initial Screen Report v1.2"
 author: "Abby Coleman"
 date: "`r Sys.Date()`"
 geometry: margin = 2cm
@@ -14,7 +14,7 @@ header-includes:
   - \posttitle{\end{center}}
   - \usepackage{fancyhdr}
   - \pagestyle{fancy}
-  - \fancyhead[C]{Sandbox Round 1}
+  - \fancyhead[C]{AR-Dimer Round 1 Initial Screen Report v1.2}
   - \fancyhead[L]{\includegraphics[width=0.5in]{Ellison Medical Institute Logo_Bronze.png}}
   - \fancyfoot[L]{Ellison Medical Institute}
   - \setlength{\headheight}{30.10677pt}
@@ -23,6 +23,7 @@ header-includes:
 
 ```{r setup, include = FALSE}
 knitr::opts_knit$set(root.dir='..')
+options(knitr.kable.NA = '')
 #TODO: load these in a function
 source(here("R", "plot_plate_zfactors.R"))
 source(here("R", "plot_zfactor_outliers.R"))
@@ -46,12 +47,16 @@ ctrl0 <<- "DMSO"
 ctrl100 <<- "R1881"
 ```
 
+\newpage
 
 # Overall
 
+**Key Takeaway: The quantile outlier bound designated many more hits than Michael, but our QC metrics kicked out some of his hits.**
+
+
 ```{r initial_screen_plots, results = "asis", warning = FALSE}
 screen <- data %>%
-  filter(assay_type == "Screen" & is.na(qc_flag))
+  filter(assay_type == "Screen")
 # %>%
 #   filter(as.numeric(short_mcule_lab) < 75 & as.numeric(short_mcule_lab) > 60)
 #^ this allows you to see compound 272 more up close. that is the purple dot that appears to not be designated as a quantile outlier hit. but it actually is designated a quantile outlier hit, the median is just higher than the most visible purple point that you see.
@@ -66,30 +71,76 @@ write.xlsx(summary_tab, here("reports", "Hit Summary.xlsx"))
 #get counts
 #hits for both me and michael
 quant <- data %>%
-  filter(assay_type == "Screen" & is.na(qc_flag)) %>%
+  filter(assay_type == "Screen") %>%
   filter(!is.na(scr_hit) | !is.na(tier)) 
 #michael's hits that aren't quantile outliers
 # manual_only <- data %>%
 #   filter(assay_type == "Screen") %>%
 #   filter(is.na(scr_hit) & !is.na(tier))
+quant_only <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter(!is.na(scr_hit))
 ```
 
 \newpage
 
-`r get_n_mcules(quant)` compounds were designated hits by the quantile outlier method.
+`r get_n_mcules(quant_only)` compounds were designated hits by the quantile outlier method.
 
 ```{r}
 screenplot_quant <- plot_screen(quant, "Hits Only", include_xaxis = TRUE)
 print(screenplot_quant$plot)
 ```
 
-```{r}
-kable(screenplot_quant$table, digits = 2)
+Note: unhighlighted hits (that aren't controls) were designated hits by Michael's algorithm, but not the Comp Bio team's algorithm. 
+
+MCULES 280, 368, and 894 were run in experiment 680021, which had two plates with Z'Factor < 0. MCULE 168 was run in experiment 679577; one of the plates for this experiment had a Z'Factor < 0.
+
+\newpage
+
+
+**The quantile outlier bound designated more hits than Michael, but our QC metrics kicked out 4 of his hits.**
+
+```{r hit_tab0}
+all_hits <- screenplot_quant$table
+
+agreement <- all_hits %>%
+  filter(!is.na(`Michael's Hits`) & !is.na(`Quantile Outlier Hit`)) %>%
+  mutate(`QC Flag` = case_when(`QC Flag` == "plate z'factor < 0" ~ "one of the plates in this experiment had a Z'Factor < 0."))
+michael_only <- all_hits %>%
+  filter(!is.na(`Michael's Hits`) & is.na(`Quantile Outlier Hit`)) %>%
+  arrange(Compound)
+cbt_only <- all_hits %>%
+  filter(is.na(`Michael's Hits`) & !is.na(`Quantile Outlier Hit`))
+
 ```
+
+**Compounds that were designated hits by Michael and CBT algorithms.** Our algorithms agreed for `r length(unique(agreement$Compound))` compounds.
+
+```{r agreement, out.width = "90%"}
+kable(agreement, digits = 2)
+```
+
+**Compounds that were designated hits by Michael, but not the Computational Biology Team.** Michael designed `r length(unique(michael_only$Compound))` compounds hits that the CBT did not.
+
+Three of Michael's hits had replicates in experiment 680021, which had 2 plates with Z'Factor < 0. MCULE 168 had one replicate from a plate with Z'Factor < 0, and a maximum % control RLU that was higher than the quantile outlier bound.
+
+```{r michael, out.width = "90%"}
+kable(michael_only, digits = 2)
+```
+
+\newpage
+
+**Compounds that were designated hits by the CBT, but not Michael.** We designated `r length(unique(cbt_only$Compound))` compounds as hits. Our method designates many more compounds than Michael's method.
+
+```{r cbt_only_hits_table}
+kable(cbt_only, digits = 2)
+```
+
+\newpage
 
 # Compound %CV's
 
-```{r cvs, out.width = "70%", warning = FALSE}
+```{r cvs, out.width = "90%", warning = FALSE}
 for_plot <- data %>%
   select(experiment_id,
          experiment_type,
@@ -116,7 +167,8 @@ cvplot <- ggplot(data = for_plot, aes(x = assay_type, y = exp_cv_result)) +
   labs(
     x = "Assay Type",
     y = "Summary %CV",
-    title = "All %CV's, Calculated by Compound"
+    title = "All %CV's, Calculated by Compound",
+    subtitle = "Experiments with 2/3 Z'Factors excluded from compound %CV cutoffs and this plot."
   ) +
   theme(
     panel.grid.major = element_blank(),
@@ -129,12 +181,46 @@ cvplot
 
 See Compound %CV Outliers.
 
-```{r see_cv_outliers}
+```{r see_cv_outliers, out.width = "90%"}
 #screen data
 cv_outliers <- data %>%
   filter(assay_type == "Screen" & is.na(qc_flag)) %>%
   filter(ctrl == "sample") %>%
-  filter(exp_cv_result > compound_cv_cutoff) 
+  filter(exp_cv_result > compound_cv_cutoff) %>%
+  mutate(exp_plate = paste("Exp ", experiment_id, ", " ,data.plate_id, sep = ""))
+#color-blind safecolor scale (discrete)
+# okabe <- c("black", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+cv_outliers_raw_plot <- ggplot(data = cv_outliers, aes(x = short_mcule_lab, y = data.result, color = exp_plate)) +
+  geom_point(alpha = .4, size = 3) +
+  theme_bw() +
+  # scale_color_viridis_d() +
+  labs(title = "Raw Signal for Compounds with Outlier %CV's",
+       x = "MCULE",
+       y = "Raw RLU",
+       color = "Plate ID") +
+  scale_color_paletteer_d("colorBlindness::paletteMartin") +
+  theme(text = element_text(family = "serif"))
+  # scale_color_manual(values = okabe) 
+cv_outliers_raw_plot
+
+see_tab <- data %>%
+  filter(assay_type == "Screen") %>%
+  filter(ctrl == "sample") %>%
+  filter(exp_cv_result > compound_cv_cutoff)  %>%
+  select(short_mcule_lab, exp_cv_result, exp_mean_res, exp_sd_res) %>%
+  distinct() %>%
+  arrange(short_mcule_lab)
+```
+
+Experiments 679577 and 679915 had compounds with high outlier %CV's. For experiment 679915, this appears to have happened because plate 1486 had consistently lower signal for these molecules. For experiment 679577, one of the plates (1479) was excluded from the compound %CV calculations because it had a Z'Factor < 0. Compounds run in this experiment had one fewer replicate, likely explaining why they had high variability and therefor high outlier compound %CVs.
+
+
+```{r checker, include = FALSE}
+#see na compound cvs
+cv_outliers <- data %>%
+  filter(assay_type == "Screen" & is.na(qc_flag)) %>%
+  filter(ctrl == "sample") %>%
+  filter(is.na(exp_cv_result)) 
 #color-blind safecolor scale (discrete)
 # okabe <- c("black", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 cv_outliers_raw_plot <- ggplot(data = cv_outliers, aes(x = short_mcule_lab, y = data.result, color = data.plate_id)) +
@@ -149,16 +235,8 @@ cv_outliers_raw_plot <- ggplot(data = cv_outliers, aes(x = short_mcule_lab, y = 
   # scale_color_manual(values = okabe) 
 cv_outliers_raw_plot
 
-see_tab <- data %>%
-  filter(assay_type == "Screen") %>%
-  filter(ctrl == "sample") %>%
-  filter(exp_cv_result > compound_cv_cutoff)  %>%
-  select(short_mcule_lab, exp_cv_result, exp_mean_res, exp_sd_res) %>%
-  distinct() %>%
-  arrange(short_mcule_lab)
-#TODO: change color scale
-
 ```
+
 
 \newpage
 
@@ -168,11 +246,11 @@ These plates were excluded for having Z'factor < 0.
 
 ```{r z_prime_lt_0}
 excluded <- data %>%
-  filter(assay_type == "Screen" & qc_flag == "plate z'factor < 0")
+  filter(assay_type == "Screen" & !is.na(qc_flag))
 excluded_tab <- excluded %>%
-  select(experiment_id, data.plate_id, plate_zprime) %>%
+  select(experiment_id, data.plate_id, plate_zprime, qc_flag) %>%
   distinct()
-names(excluded_tab) <- c("Experiment ID", "Plate ID", "Plate Z'Factor")
+names(excluded_tab) <- c("Experiment ID", "Plate ID", "Plate Z'Factor", "QC Flag")
 kable(excluded_tab, digits = 2)
 ```
 
