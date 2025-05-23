@@ -34,22 +34,30 @@ get_normed_plot <- function(df, min_y, max_y) {
     arrange(cmpnds)
   color_df["color"] <- viridis(nrow(color_df), end = .8)
   outplot <- ggplot(data = df, aes(x = coi_dose, y = normed_results, color = coi_lab)) +
-    geom_point(size = 2, alpha = .5, aes(shape = data.plate_id)) +
+    geom_point(size = 2,
+               alpha = .5,
+               aes(shape = data.plate_id)) +
     theme_bw() +
     scale_x_log10() +
     scale_color_manual(breaks = color_df$cmpnds, values = color_df$color) +
     ylim(c(min_y, max_y)) +
-    theme(legend.position = "bottom",
-          legend.box = "vertical",
-          text = element_text(family = "serif")) +
-    labs(x = "Dose",
-         y = "Percent Control (%)",
-         shape = "Plate",
-         color = "Compound") +
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      text = element_text(family = "serif")
+    ) +
+    labs(
+      x = "Dose",
+      y = "Percent Control (%)",
+      shape = "Plate",
+      color = "Compound"
+    ) +
     guides(col = guide_legend(ncol = 2))
   models <- stats %>%
     #filter for relevant compounds
-    filter(coi %in% df$coi & data.plate_id %in% df$data.plate_id & ctrl %in% df$ctrl) %>%
+    filter(coi %in% df$coi &
+             data.plate_id %in% df$data.plate_id &
+             ctrl %in% df$ctrl) %>%
     #filter out 0 and 100% controls-- we don't need to see the drcs for those!
     filter(!(ctrl %in% c("100% control", "0% control")))
   they_model <- models %>%
@@ -60,7 +68,7 @@ get_normed_plot <- function(df, min_y, max_y) {
     cmp_lab <- str_remove(cmp, "MCULE-")
     color1 <- color_df[color_df$cmpnds == cmp_lab, "color"]
     #TODO: make sure the experiment u loop on is also plotted
-      #or u plot with experiment instead of date
+    #or u plot with experiment instead of date
     for (exp in they_model$experiment_id) {
       #TODO: add test to make sure you only get one model here
       #we're grabbing out the model for this compound (of interest..... coi) and experiment
@@ -68,7 +76,8 @@ get_normed_plot <- function(df, min_y, max_y) {
       #so there SHOULD only EVER be one model popping up here
       #but add a test to make sure!
       #TODO: filter this instead
-      model_df <- they_model[they_model$coi == cmp & they_model$experiment_id == exp,]
+      model_df <- they_model[they_model$coi == cmp &
+                               they_model$experiment_id == exp, ]
       #TODO: loop better to avoid having to do this:
       if (nrow(model_df) == 0) {
         next
@@ -80,7 +89,7 @@ get_normed_plot <- function(df, min_y, max_y) {
       #TODO: add a test that checks that none of these doses are NA
       max_dose <- max(model_df$data[[1]]$coi_dose, na.rm = TRUE)
       #get points to draw the curve
-      curve.data.drc <- PR(model, xVec = seq_log(min_dose, max_dose))
+      curve.data.drc <- PR(model, xVec = pracma::logseq(min_dose, max_dose, n = 100))
       curve.data <- data.frame(y = as.vector(unlist(curve.data.drc)), x = as.numeric(names(curve.data.drc)))
       #add the drc curve to the plot
       outplot <- outplot +
@@ -88,12 +97,23 @@ get_normed_plot <- function(df, min_y, max_y) {
       #           , linetype = linetype) +
       # annotate("label", x = label_x_plotter, hjust = 1, y = label_y_plotter, label = this_date, color = this_color, size = 4,
       #          family = "serif")
+      #add vertical line for absolute ec50
+      abs_ec50 <- model_df$abs_ec50
+      if (!is.nan(abs_ec50 & !is.na(abs_ec50))) {
+        outplot <- outplot +
+          geom_vline(
+            xintercept = abs_ec50,
+            alpha = .5,
+            linetype = 5,
+            linewidth = .5
+          )
+      }
     }
   }
   return(outplot)
 }
 
-print_drcs <- function(mcule, drc_exps) {
+print_drcs <- function(mcule, drc_exps, raw_plot_ylab = "input raw plot ylab") {
   cat("## ", mcule)
   cat("\n")
   cat(mcule, "Raw Plot")
@@ -142,7 +162,7 @@ print_drcs <- function(mcule, drc_exps) {
     labs(
       title = paste(mcule, "Raw Dose Response"),
       x = "Dose",
-      y = "Raw RLU",
+      y = raw_plot_ylab,
       color = "Plate\nID",
       shape = "Compound"
     ) +
@@ -212,24 +232,55 @@ print_drcs <- function(mcule, drc_exps) {
   mcule_stats <- stats %>%
     filter(data.plate_id %in% plates) %>%
     filter(coi == mcule) %>%
-    mutate(abs_ec50_ci = paste0("(", round(abs_ec50_lower, 2), ", ", round(abs_ec50_upper, 2), ")"),
-           rel_ec50_ci = paste0("(", round(rel_ec50_lower, 2), ", ", round(rel_ec50_upper, 2), ")")
+    mutate(
+      abs_ec50_ci = paste0(
+        "(",
+        round(abs_ec50_lower, 2),
+        ", ",
+        round(abs_ec50_upper, 2),
+        ")"
+      ),
+      rel_ec50_ci = paste0(
+        "(",
+        round(rel_ec50_lower, 2),
+        ", ",
+        round(rel_ec50_upper, 2),
+        ")"
+      )
     ) %>%
-    select(experiment_id, data.plate_id, abs_ec50, abs_ec50_ci,
-           rel_ec50, rel_ec50_ci, rse, rse_cutoff, extrapolated_rel_ec50, extrapolated_abs_ec50)
-  names(mcule_stats) <- c("Experiment", "Plate", "Absolute EC50", "Absolute EC50 CI",
-                          "Relative EC50", "Relative EC50 CI", "RSE", "RSE Cutoff", "Extrapolated Relative C50", "Extrapolated Absolute EC50")
+    select(
+      experiment_id,
+      data.plate_id,
+      abs_ec50,
+      abs_ec50_ci,
+      rel_ec50,
+      rel_ec50_ci,
+      rse,
+      rse_cutoff,
+      extrapolated_rel_ec50,
+      extrapolated_abs_ec50
+    )
+  names(mcule_stats) <- c(
+    "Experiment",
+    "Plate",
+    "Absolute EC50",
+    "Absolute EC50 CI",
+    "Relative EC50",
+    "Relative EC50 CI",
+    "RSE",
+    "RSE Cutoff",
+    "Extrapolated Relative C50",
+    "Extrapolated Absolute EC50"
+  )
   cat("\n")
-  kable(mcule_stats, digits = 3)
+
+  print(kable(mcule_stats, digits = 3))
+
   cat("\n")
   cat("\\newpage")
   cat("\n")
 
 }
-
-
-#TODO: put this at the top
-library(StratigrapheR)
 
 does_it_model <- function(df) {
   tryCatch({
@@ -247,13 +298,11 @@ does_it_model <- function(df) {
 }
 
 model_drcs <- function(df) {
-  drm(
-    normed_results ~ coi_dose,
-    data = df,
-    fct = LL.4(names = c(
-      "hill", "min_value", "max_value", "ec_50"
-    ))
-  )
+  drm(normed_results ~ coi_dose,
+      data = df,
+      fct = LL.4(names = c(
+        "hill", "min_value", "max_value", "ec_50"
+      )))
 }
 
 get_rse <- function(drm_col1) {
@@ -262,4 +311,183 @@ get_rse <- function(drm_col1) {
   return(rse)
 }
 
+#in data_clean.R
+sort_compound_names <- function(df) {
+  df <- df %>%
+    select(short_mcule_lab) %>%
+    distinct() %>%
+    arrange(short_mcule_lab)
+  returner <- df$short_mcule_lab
+  return(returner)
+}
 
+add_ctrls_to_df <- function(df, ctrl_input) {
+  add_ctrls <- data %>%
+    filter(experiment_id %in% unique(df$experiment_id)) %>%
+    filter(ctrl == ctrl_input)
+  df <- bind_rows(df, add_ctrls)
+  return(df)
+}
+
+plot_screen <- function(df, input_title = "", include_xaxis = FALSE) {
+  #include 0 and 100% controls for the plates in df
+  #(if they're not already in there)
+  if (!("100% control" %in% unique(df$ctrl))) {
+    df <- add_ctrls_to_df(df, "100% control")
+  }
+  if (!("0% control" %in% unique(df$ctrl))) {
+    df <- add_ctrls_to_df(df, "0% control")
+  }
+
+  df <- df %>%
+    #the control compounds get weird zfactors, so it's best to set those as NA so they're not included in the zfactor color scale
+    # mutate(plotter_zfactor = case_when(ctrl == "control compound" ~ NA, TRUE ~ summary_zfactor)) %>%
+    #we don't want to plot any blank wells
+    filter(ctrl != "blank well") %>%
+    filter(is.na(qc_flag))
+
+  #get color breaks for compound %CV scale
+  # color_break_range <- range(df$exp_cv_result[df$exp_cv_result > -Inf], na.rm = TRUE)
+  # color_quantiles <- unname(quantile(color_break_range))
+  # color_breaks <- round(color_quantiles, 2)
+  # colors <- color_breaks %>%
+  #   as.data.frame()
+  # colors["color"] <- c("#2D1160FF", "#2D1160FF", "#B63679FF", "#FEAF77FF", "#FEAF77FF")
+  # colors <- colors %>%
+  #   select(color) %>%
+  #   as.list()
+
+  #get 100% control quantile outlier bound
+  ctrl100_bound <- max(df$hit_bound, na.rm = TRUE)
+  #TODO: add test-- there should be exactly one value for hit_bound
+
+  #get a dataframe of medians per coi
+  #(this will be used to designate hits)
+  meds <- df %>%
+    # filter(ctrl == "sample") %>%
+    select(
+      coi,
+      short_mcule_lab,
+      ctrl,
+      scr_hit,
+      tier,
+      min_plate_zprime,
+      min_rel_rlu,
+      max_rel_rlu,
+      med_rel_rlu
+    ) %>%
+    distinct()
+
+  plot_hits <- meds %>%
+    filter(!is.na(scr_hit))
+
+  #get hit rate to add to plot as geom_label
+  n_hits <- nrow(plot_hits)
+  hit_rate <- n_hits/nrow(meds)*100
+
+  #get x value to label outlier bound line
+  label_x_plotter <- quantile(as.numeric(unique(df$short_mcule_lab)), probs = .97)[[1]]
+
+  screenplot <- ggplot(data = df, aes(x = short_mcule_lab, y = normed_results)) +
+    #plot rangelines
+    geom_segment(data = meds, color = "darkgray", aes(x = short_mcule_lab, y = min_rel_rlu, xend = short_mcule_lab, yend = max_rel_rlu)) +
+    #add points to designate hits
+    geom_point(
+      data = plot_hits,
+      size = 4,
+      alpha = .6,
+      aes(x = short_mcule_lab, y = med_rel_rlu, color = scr_hit)
+    ) +
+    scale_color_viridis_d(begin = .65, direction = -1) +
+    #plot medians
+    geom_point(
+      data = meds,
+      aes(x = short_mcule_lab, y = med_rel_rlu),
+      alpha = .6
+    ) +
+    theme_bw() +
+    labs(
+      title = input_title,
+      subtitle = paste("Screening Experiments", paste(unique(df$experiment_id), collapse = ", ")),
+      x = "Compound",
+      y = "Percent Control RLU",
+      color = "ZFactor"
+    ) +
+    geom_hline(
+      yintercept = ctrl100_bound,
+      color = "#FEAF77FF",
+      linewidth = 1.5
+    ) +
+    labs(color = "Hit") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      legend.key.height = unit(.8, "cm"),
+      legend.key.width = unit(.3, "cm"),
+      legend.text = element_text(size = 7),
+      plot.margin = unit(c(.1, .1, .1, .1), "cm"),
+      axis.text = element_text(size = 8),
+      text = element_text(family = "serif"),
+      axis.text.x = element_text(size = 6.5, angle = 90, vjust = 0.5, hjust=1)
+    ) +
+    ylim(c(0, max(df$normed_results, na.rm = TRUE))) +
+    #label cutoff line
+    geom_label(
+      x = label_x_plotter,
+      y = ctrl100_bound,
+      hjust = 1,
+      vjust = -.2,
+      size = 3,
+      label = paste0("100% Control Quantile Outlier Bound\n",
+                     n_hits,
+                     " hits ~ ",
+                     round(hit_rate, 2),
+                     "% hit rate")
+      )
+      #remove xaxis ticks and labels if include_xaxis = FALSE
+      if (include_xaxis == FALSE) {
+        screenplot <- screenplot +
+          theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+      }
+      #if the maximum y-axis value is less than 100, we want to set the top y-axis limit at 100
+      if (max(df$normed_results) < 100) {
+        ymax <- 100
+      } else {
+        ymax <- max(df$normed_results)
+      }
+      #similarly with 0 being the minimum
+      if (min(df$normed_results) > 0) {
+        ymin <- 0
+      } else {
+        ymin <- min(df$normed_results)
+      }
+      screenplot <- screenplot +
+        ylim(c(ymin, ymax))
+
+      #make summary table
+      summary_tab <- meds %>%
+        filter(
+          #include only hits that were designated by quantile outlier or michael's methods
+          !is.na(scr_hit) |
+            !is.na(tier)
+        ) %>%
+        select(coi, med_rel_rlu, scr_hit, tier) %>%
+        distinct() %>%
+        arrange(scr_hit, tier, med_rel_rlu)
+      col_names <- c("Compound",
+                     "Median % Control RLU",
+                     "Quantile Outlier Hit",
+                     "Michael's Hits")
+      names(summary_tab) <- col_names
+
+      return_list <- list("table" = summary_tab, "plot" = screenplot)
+      return(return_list)
+}
+
+get_n_mcules <- function(df) {
+  summary_df <- df %>%
+    select(short_mcule_lab) %>%
+    distinct()
+  return_n <- nrow(summary_df)
+  return(return_n)
+}
